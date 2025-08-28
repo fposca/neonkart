@@ -1,4 +1,3 @@
-// src/game/audio.ts
 import { Howl, Howler } from "howler";
 import { BGM, SFX } from "./assets";
 import type { SfxLoopName, SfxOneName } from "./assets";
@@ -29,7 +28,7 @@ export class AudioBus {
 
   stopBgm() {
     if (!this.bgm) return;
-    try { this.bgm.stop(); this.bgm.unload(); } catch { /* empty */ }
+    try { this.bgm.stop(); this.bgm.unload(); } catch {}
     this.bgm = undefined;
   }
 
@@ -47,11 +46,11 @@ export class AudioBus {
   stopSfx(name: SfxLoopName) {
     const h = this.sfxLoops.get(name);
     if (!h) return;
-    try { h.stop(); h.unload(); } catch { /* empty */ }
+    try { h.stop(); h.unload(); } catch {}
     this.sfxLoops.delete(name);
   }
 
-  // ===== One-shots (disparo enemigo, golpe al jugador) =====
+  // ===== One-shots =====
   playOne(name: SfxOneName) {
     const src = SFX[name];
     new Howl({ src: [src], volume: 0.7 }).play();
