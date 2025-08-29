@@ -37,6 +37,12 @@ class SfxGate {
   }
 }
 
+/* ========= NUEVO: aceptar 'pickupLife' y aliasarlo a 'pickup' si falta ======== */
+type OneShotName = SfxOneName | "pickupLife";
+const ALIAS_ONESHOTS: Partial<Record<OneShotName, SfxOneName>> = {
+  pickupLife: "pickup", // si no está definido en SFX, usar el mismo que 'pickup'
+};
+
 export class AudioBus {
   private bgm?: Howl;
   private sfxLoops = new Map<SfxLoopName, Howl>(); // ej: "motor"
@@ -106,17 +112,27 @@ export class AudioBus {
   }
 
   // ===================== One-shots =====================
-  playOne(name: SfxOneName) {
+  /** Reproduce un SFX corto. Opcionalmente podés pasar { volume, rate } */
+  playOne(name: OneShotName, opts?: { volume?: number; rate?: number }) {
     // throttle suave para evitar spam (crash/impact rápidos)
     if (!this.gate.allow(name)) return;
 
-    const asset = (SFX as any)[name] as string | string[];
+    // buscar asset; si no existe, usar alias si hay
+    let asset = (SFX as any)[name] as string | string[] | undefined;
+    if (!asset) {
+      const alias = ALIAS_ONESHOTS[name];
+      if (alias) asset = (SFX as any)[alias];
+    }
+    if (!asset) return; // no hay nada que reproducir
+
     const src = sourcesFrom(asset);
-    new Howl({
+    const howl = new Howl({
       src,
-      volume: 0.7,
+      volume: opts?.volume ?? 0.7,
       // html5: false → WebAudio para baja latencia en sfx cortos
-    }).play();
+    });
+    const id = howl.play();
+    if (opts?.rate) howl.rate(opts.rate, id);
   }
 
   // ===================== Utilidad =====================

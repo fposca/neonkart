@@ -119,6 +119,7 @@ export default function App() {
   const gameRef = useRef<Game | null>(null);
   const [mode, setMode] = useState<Mode>("menu");
   const [isLoading, setIsLoading] = useState(false);
+  const [loadPct, setLoadPct] = useState(0); // ⬅ porcentaje
 
   // 🔊 Un único AudioBus para toda la app (menú + juego)
   const audioRef = useRef<AudioBus>(new AudioBus());
@@ -149,8 +150,11 @@ export default function App() {
 
     // Loader del App (visible también en mobile)
     setIsLoading(true);
+    setLoadPct(0);
     try {
-      await game.init(root);
+      await game.init(root, {
+        onProgress: (p01) => setLoadPct(Math.round(p01 * 100)), // ⬅ progreso
+      });
       game.start();
       setMode("playing");
     } catch (err) {
@@ -283,7 +287,18 @@ export default function App() {
         <div style={loadOverlay}>
           <div style={loadPanel}>
             <div style={spinner} />
-            <span>Cargando juego…</span>
+            <div style={{ display: "grid", gap: 6 }}>
+              <span>Cargando juego… {loadPct}%</span>
+              <div style={{
+                width: 180, height: 8, borderRadius: 6,
+                background: "rgba(255,255,255,0.12)", overflow: "hidden"
+              }}>
+                <div style={{
+                  width: `${loadPct}%`, height: "100%",
+                  background: "#00f0ff"
+                }} />
+              </div>
+            </div>
           </div>
         </div>
       )}

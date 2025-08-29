@@ -28,7 +28,8 @@ type Turret = {
 
 type Enemy = Runner | Turret;
 type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" };
+// ⬇️ ahora soporta “life” y “god”
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
 
 type Rival = {
   sp: PIXI.Sprite;
@@ -65,10 +66,17 @@ export class Level4 {
     this.stage.addChild(this.overlay);
 
     this.world.sortableChildren = true;
+
+    // FX Modo Dios
+    this.godHalo.visible = false;
+    this.godHalo.zIndex = 990;         // bajo el player (1000)
+    this.trailContainer.zIndex = 985;  // aún más atrás
+    this.world.addChild(this.trailContainer, this.godHalo);
   }
 
   /* ===== Estado de carga ===== */
   ready = false;
+  readonly FINISH_Y_OFFSET = 54;
 
   /* ===== Viewport / Capas ===== */
   readonly W = 1280;
@@ -215,6 +223,27 @@ export class Level4 {
   pickupTimer = 3.5;
   pickupMin = 5.0; // aparecen un pelín más seguido
   pickupMax = 9.0;
+  // ⬇️ life: ritmo separado, más espaciado
+  lifePickupTimer = 10;
+  lifePickupMin = 14;
+  lifePickupMax = 20;
+
+  /* ===== Modo Dios (más frecuente en L4) ===== */
+  godMode = false;
+  godTimer = 0;
+  godDuration = 16;          // segundos de invulnerabilidad/boost
+  godPickupTimer = 12;       // ⬅ empieza antes que en L3
+  godPickupMin = 12;         // ⬅ intervalos más cortos
+  godPickupMax = 20;
+  godPickupsSpawned = 0;
+  godPickupsMax = 2;         // 2 garantizados; chance de 3 en load()
+
+  // FX
+  godHalo = new PIXI.Graphics();
+  godHaloPulse = 0;
+  trailContainer = new PIXI.Container();
+  godTrail: { sp: PIXI.Graphics; life: number; max: number }[] = [];
+  godTrailTimer = 0;
 
   /* ===== Countdown ===== */
   controlsLocked = true;
@@ -266,7 +295,7 @@ export class Level4 {
   private showLapAnnounce(txt: string) {
     this.lapAnnounce.text = txt;
     this.lapAnnounce.visible = true;
-    this.lapAnnounce.alpha = 1;
+       this.lapAnnounce.alpha = 1;
     this.lapAnnounceTimer = 2.0;
     this.opts.audio?.playOne?.("countBeep");
   }
@@ -289,7 +318,7 @@ export class Level4 {
       g.zIndex = 750;
       this.finishSprite = g;
     }
-    this.finishSprite.position.set(this.screenX(this.lapFinishX), this.H - 160);
+    this.finishSprite.position.set(this.screenX(this.lapFinishX),  this.ground.y + this.FINISH_Y_OFFSET);
     this.finishSprite.visible = true;
     this.world.addChild(this.finishSprite);
   }
@@ -317,8 +346,10 @@ export class Level4 {
     this.finishTexFinal    = await this.tryLoad((IMG as any).finishFinal);
     this.finishTexFallback = await this.tryLoad((IMG as any).finish ?? (IMG as any).finishFinal);
 
-    // === Pickup pedal ===
+    // === Pickups ===
     this.tex.pedal = await this.tryLoad((IMG as any).pedalDist ?? IMG.pedalDist);
+    this.tex.life  = await this.tryLoad((IMG as any).life ?? "/assets/img/life.png");
+    this.tex.god   = await this.tryLoad((IMG as any).god ?? "/assets/img/god.png"); // ⬅ god pickup
 
     // === Fondo/Suelo (con fallback) ===
     this.tex.fondo = (await this.tryLoad(fondo4)) ?? (await this.tryLoad(IMG.fondo));
@@ -350,7 +381,7 @@ export class Level4 {
 
     // “Modo noche”: lámina negra semitransparente encima del fondo
     this.bgShade.clear().rect(0, 0, this.W, this.H).fill(0x000000);
-    this.bgShade.alpha = 0.28; // ajustá si querés más/menos oscuro
+    this.bgShade.alpha = 0.28;
     this.bgShade.zIndex = 50;
 
     // Suelo
@@ -424,9 +455,12 @@ export class Level4 {
     this.raceTime = 0;
     this.timeText.text = "00:00.000";
 
-    // Sonidos (mismos que L1/L3)
+    // Sonidos
     this.opts.audio?.playBgmLevel1?.();
     this.opts.audio?.playSfx?.("motor");
+
+    // GOD: chance de 3 pickups en L4 (60%)
+    if (Math.random() < 0.6) this.godPickupsMax = 3;
 
     // Countdown
     this.setupCountdown();
@@ -457,18 +491,28 @@ export class Level4 {
     this.lampGreen.position.set(spacing, 0);
     this.traffic.addChild(this.lampRed, this.lampYellow, this.lampGreen);
 
+    // panel
     this.overlay.removeChildren();
-    const panel = new PIXI.Graphics().roundRect(0,0,420,220,18).fill(0x111111).stroke({ width:2, color:0x00d2ff });
-    panel.position.set((this.W-420)/2, (this.H-220)/2 - 30);
-    this.countdownText.position.set(panel.x + 210, panel.y + 70);
-    this.traffic.position.set(panel.x + 210, panel.y + 150);
+    const panelW = 560;
+    const panelH = 260;
+
+    const panel = new PIXI.Graphics()
+      .roundRect(0, 0, panelW, panelH, 24)
+      .fill({ color: 0x000000, alpha: 0.4 })
+      .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
+
+    const cx = (this.W - panelW) / 2;
+    const cy = (this.H - panelH) / 2 - 30;
+    panel.position.set(cx, cy);
+
+    const centerX = cx + panelW / 2;
+    const centerY = cy + panelH / 2;
+
+    this.countdownText.position.set(centerX, centerY - 34);
+    this.traffic.position.set(centerX, centerY + 62);
 
     this.overlay.addChild(panel, this.countdownText, this.traffic);
     this.overlay.visible = true;
-
-    this.setTrafficLights(false, false, false);
-    this.setTrafficLights(true, false, false);
-    this.opts.audio?.playOne?.("countBeep");
   }
   private setTrafficLights(red: boolean, yellow: boolean, green: boolean) {
     this.lampRed.tint = red ? 0xff0000 : 0x550000;
@@ -486,7 +530,6 @@ export class Level4 {
       return sp;
     };
     const startWorldX = this.camX + this.player.x;
-    // un pelín más rápidos que L3
     const r1: Rival = { sp: mk(this.tex.rival1), pos: { x: startWorldX + 40, y: this.playerY - 6 }, speed: this.baseSpeed, base: 500, amp: 48, phase: Math.random()*Math.PI*2 };
     const r2: Rival = { sp: mk(this.tex.rival2), pos: { x: startWorldX - 40, y: this.playerY + 6 }, speed: this.baseSpeed, base: 485, amp: 38, phase: Math.random()*Math.PI*2 };
     this.rivals.push(r1, r2);
@@ -600,13 +643,23 @@ export class Level4 {
   private levelComplete(place: 1 | 2 | 3) {
     if (this.finished) return;
     this.finished = true;
-    const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
+
+    // congelar combate y cortar sonidos
+    for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
+    this.shots = [];
+    this.invuln = 9999;
+    this.opts.audio?.stopSfx?.("motor");
+    this.opts.audio?.stopBgm?.();
+
+    // texto final
+    const label = place === 1 ? "¡GANASTE!" : place === 2 ? "2º" : "3º";
     this.showResultOverlay(label);
+
     if (this.overlayTimer) clearTimeout(this.overlayTimer);
     this.overlayTimer = window.setTimeout(() => {
       this.overlay.visible = false;
       this.opts.onLevelComplete?.(place);
-    }, 3000);
+    }, 3200);
   }
 
   private endGame() {
@@ -620,6 +673,41 @@ export class Level4 {
       this.opts.onGameOver?.();
     }, 3000);
     this.opts.audio?.stopSfx?.("motor");
+    this.opts.audio?.stopBgm?.();
+  }
+
+  /* ============================== GOD mode =============================== */
+  private setGod(on: boolean) {
+    this.godMode = on;
+    if (on) {
+      this.godTimer = this.godDuration;
+      (this.player as any).tint = 0xffee66;
+      this.drawGodHalo();
+      this.godHalo.visible = true;
+      this.godHalo.alpha = 0.5;
+      this.godHaloPulse = 0;
+      this.showLapAnnounce("¡MODO DIOS!");
+    } else {
+      (this.player as any).tint = 0xffffff;
+      this.godHalo.visible = false;
+    }
+  }
+  private drawGodHalo() {
+    this.godHalo.clear();
+    this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 72, 38).fill({ color: 0xffd200, alpha: 0.22 });
+    this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 46, 20).fill({ color: 0xffffaa, alpha: 0.18 });
+  }
+  private emitGodTrail() {
+    for (let i = 0; i < 2; i++) {
+      const g = new PIXI.Graphics().roundRect(-10, -4, 20, 8, 4).fill(0xfff4b0);
+      g.alpha = 0.85;
+      g.position.set(
+        this.player.x - 30 + (Math.random() * 14 - 7),
+        this.player.y - this.jumpOffset + (Math.random() * 10 - 5)
+      );
+      this.trailContainer.addChild(g);
+      this.godTrail.push({ sp: g, life: 0.5, max: 0.5 });
+    }
   }
 
   /* =============================== Update ================================ */
@@ -671,9 +759,38 @@ export class Level4 {
     if (this.shootPlayerTimer > 0) { this.shootPlayerTimer -= dt; if (this.shootPlayerTimer <= 0) this.setPlayerTextureNormal(); }
     if (this.playerShotCd > 0) this.playerShotCd -= dt;
 
-    // velocidad / lateral
+    // GOD MODE
+    if (this.godMode) {
+      this.godTimer -= dt;
+      if (this.godTimer <= 0) {
+        this.setGod(false);
+      } else {
+        // halo pegado al player
+        this.godHalo.position.set(this.player.x, 0);
+        this.drawGodHalo();
+        // pulso
+        this.godHaloPulse += dt * 3;
+        const k = 0.5 + 0.2 * Math.sin(this.godHaloPulse * 4);
+        this.godHalo.alpha = k;
+        // trail
+        this.godTrailTimer -= dt;
+        if (this.godTrailTimer <= 0) { this.emitGodTrail(); this.godTrailTimer = 0.03; }
+      }
+    }
+    // actualizar partículas del trail
+    if (this.godTrail.length) {
+      for (const t of this.godTrail) {
+        t.life -= dt;
+        t.sp.alpha = 0.85 * Math.max(0, t.life / t.max);
+        t.sp.x -= this.speed * dt * 0.2;
+      }
+      this.godTrail = this.godTrail.filter(t => { const alive = t.life > 0; if (!alive) t.sp.destroy(); return alive; });
+    }
+
+    // velocidad / lateral (boost más fuerte en L4)
     const accelPressed = this.input.a.right && !this.controlsLocked;
-    const target = accelPressed ? this.maxSpeed : this.baseSpeed;
+    const boost = this.godMode ? 2.1 : 1.0; // ⬅ boost alto
+    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost;
     if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
     else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
 
@@ -747,7 +864,7 @@ export class Level4 {
     // meta sprite posición
     if (this.finishSprite) {
       this.finishSprite.x = this.screenX(this.lapFinishX);
-      this.finishSprite.y = this.ground.y;
+      this.finishSprite.y = this.ground.y + this.FINISH_Y_OFFSET;
     }
 
     /* ===== Rivales ===== */
@@ -765,10 +882,13 @@ export class Level4 {
       if (gap > 450) catchup += 60;
       if (gap < -450) catchup -= 40;
 
+      // handicap cuando estás en Modo Dios (les cuesta seguirte)
+      const godHandicap = this.godMode ? -160 : 0;
+
       const rivalMaxWhenYouBoost = this.maxSpeed - 10;
       const rivalMaxWhenCruise   = this.maxSpeed + 40;
 
-      const targetVBase = r.base + osc + catchup;
+      const targetVBase = r.base + osc + catchup + godHandicap;
       const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
       const minRival = this.baseSpeed + 45;
 
@@ -796,7 +916,6 @@ export class Level4 {
           if (R.shootFlash <= 0 && !R.dead && this.tex.enemy) e.sp.texture = this.tex.enemy;
         }
 
-        // ⬇️ SFX crash solo si hubo daño real
         if (!e.dead && this.jumpOffset < 10) {
           const pb = this.player.getBounds();
           const eb = e.sp.getBounds();
@@ -805,9 +924,7 @@ export class Level4 {
             this.playerX -= 50 * dt * 60;
             e.pos.x += 100 * dt;
             const minKeep = this.baseSpeed * 0.75; if (this.speed < minKeep) this.speed = minKeep;
-            if (this.hurtPlayer(7)) {              // ⬅️ gatea por invuln
-              this.opts.audio?.playOne?.("crash");
-            }
+            if (this.hurtPlayer(7)) { this.opts.audio?.playOne?.("crash"); }
           }
         }
       } else {
@@ -821,22 +938,19 @@ export class Level4 {
           e.shootCd = 0.6 + Math.random() * 0.7;
         }
 
-        // ⬇️ SFX crash solo si hubo daño real
         if (!e.dead && this.jumpOffset < 10) {
           const pb = this.player.getBounds();
           const eb = e.sp.getBounds();
           const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
           if (overlap && !this.controlsLocked) {
             this.playerX -= 50 * dt * 60;
-            if (this.hurtPlayer(9)) {              // ⬅️ gatea por invuln
-              this.opts.audio?.playOne?.("crash");
-            }
+            if (this.hurtPlayer(9)) { this.opts.audio?.playOne?.("crash"); }
           }
         }
       }
     }
 
-    // disparo enemigo (balas) — ⬇️ “impact” sólo si hubo daño
+    // disparo enemigo (balas)
     for (const s of this.shots) {
       s.pos.x += s.vx * dt;
       s.pos.y += s.vy * dt;
@@ -846,9 +960,7 @@ export class Level4 {
       const pb = this.player.getBounds(), sb = s.sp.getBounds();
       const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
       if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
-        if (this.hurtPlayer(13)) {                 // ⬅️ gatea por invuln
-          this.opts.audio?.playOne?.("impact");
-        }
+        if (this.hurtPlayer(13)) { this.opts.audio?.playOne?.("impact"); }
         s.pos.x = this.camX - 9999;
       }
     }
@@ -858,12 +970,27 @@ export class Level4 {
       return alive;
     });
 
-    // Pickups
+    // ===== Pickups =====
     this.pickupTimer -= dt;
     if (this.pickupTimer <= 0 && !this.controlsLocked) {
       this.spawnPickup();
       this.pickupTimer = this.pickupMin + Math.random() * (this.pickupMax - this.pickupMin);
     }
+
+    // ⬇️ vida independiente
+    this.lifePickupTimer -= dt;
+    if (this.lifePickupTimer <= 0 && !this.controlsLocked) {
+      this.spawnLifePickup();
+      this.lifePickupTimer = this.lifePickupMin + Math.random() * (this.lifePickupMax - this.lifePickupMin);
+    }
+
+    // ⭐ GOD pickup (más frecuente en L4)
+    this.godPickupTimer -= dt;
+    if (this.godPickupsSpawned < this.godPickupsMax && this.godPickupTimer <= 0 && !this.controlsLocked) {
+      this.spawnGodPickup();
+      this.godPickupTimer = this.godPickupMin + Math.random() * (this.godPickupMax - this.godPickupMin);
+    }
+
     for (const p of this.pickups) {
       p.pos.x -= this.baseSpeed * dt;
       p.sp.x = this.screenX(p.pos.x); p.sp.y = p.pos.y;
@@ -937,16 +1064,58 @@ export class Level4 {
     this.pickups.push({ sp, pos: { x, y }, kind: "distortion" });
   }
 
-  private givePickup(_p: Pickup){
-    this.hasDistortion = true;
-    this.ammo = 10;
-    this.updateAmmoHud();
-    this.opts.audio?.playOne?.("pickup");
+  // vida
+  private spawnLifePickup() {
+    const x = this.camX + this.W + 200;
+    const y = this.playerY - 40;
+    const sp = new PIXI.Sprite(this.tex.life ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 420;
+    if (!this.tex.life) {
+      const g = new PIXI.Graphics().circle(0, 0, 10).fill(0x33dd33);
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "life" });
+  }
+
+  // ⭐ GOD pickup
+  private spawnGodPickup() {
+    const x = this.camX + this.W + 220;
+    const y = this.playerY - 60;
+    const sp = new PIXI.Sprite(this.tex.god ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 840;
+    if (!this.tex.god) {
+      const g = new PIXI.Graphics().circle(0,0,12).fill(0xffee66).stroke({ width:2, color:0xaa9900 });
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "god" });
+  }
+
+  private givePickup(p: Pickup){
+    if (p.kind === "distortion") {
+      this.hasDistortion = true;
+      this.ammo = 10;
+      this.updateAmmoHud();
+      this.opts.audio?.playOne?.("pickup");
+    } else if (p.kind === "life") {
+      this.hp = Math.min(this.maxHP, this.hp + 25);
+      this.redrawHP();
+      this.opts.audio?.playOne?.("pickup");
+    } else if (p.kind === "god") {
+      if (this.godPickupsSpawned < this.godPickupsMax) {
+        this.godPickupsSpawned++;
+        this.setGod(true);
+        this.opts.audio?.playOne?.("pickupGod");
+      }
+    }
   }
 
   /* ============================== Daño player ============================ */
   private hurtPlayer(dmg: number): boolean {
-    if (this.invuln > 0 || this.ended || this.finished) return false; // nada de daño
+    if (this.invuln > 0 || this.ended || this.finished || this.godMode) return false; // nada de daño en GOD
     this.hp = Math.max(0, this.hp - dmg);
     this.invuln = this.invulnTime;
     this.redrawHP();
@@ -967,9 +1136,13 @@ export class Level4 {
     for (const s of this.shots)   { try { s.sp.destroy(); } catch {} }
     for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
     for (const p of this.pickups) { try { p.sp.destroy(); } catch {} }
+    for (const t of this.godTrail) { try { t.sp.destroy(); } catch {} }
+    try { this.godHalo.destroy(); } catch {}
+    try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
     this.opts.audio?.stopSfx?.("motor");
+    this.opts.audio?.stopBgm?.();
     this.ready = false;
   }
 }

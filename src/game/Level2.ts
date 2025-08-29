@@ -29,7 +29,7 @@ type Rival = {
 };
 
 type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" };
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
 
 type LevelOpts = {
   onGameOver?: () => void;
@@ -51,6 +51,12 @@ export class Level2 {
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer, this.world, this.hud, this.overlay);
     this.world.sortableChildren = true;
+
+    // FX Modo Dios
+    this.godHalo.visible = false;
+    this.godHalo.zIndex = 990;    // debajo del player (1000)
+    this.trailContainer.zIndex = 985;
+    this.world.addChild(this.trailContainer, this.godHalo);
   }
 
   /* ===== Estado de carga ===== */
@@ -79,7 +85,7 @@ export class Level2 {
   camX = 0;
   trackLength = 6000;
   lapFinishX = this.trackLength;
-  lapsTotal = 20; // para probar salto a L3 rápido; podés volver a 30
+  lapsTotal = 30;
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -87,6 +93,7 @@ export class Level2 {
   finishTexLap2?: PIXI.Texture;
   finishTexFinal?: PIXI.Texture;
   finishTexFallback?: PIXI.Texture;
+  readonly FINISH_Y_OFFSET = 54;
 
   /* ===== HUD ===== */
   hpBarBg = new PIXI.Graphics();
@@ -180,14 +187,36 @@ export class Level2 {
   playerShotCd = 0;
   playerShotCdMax = 0.25;
 
-  /* ===== Pickups (pedal / 10 tiros) ===== */
+  /* ===== Pickups ===== */
   pickups: Pickup[] = [];
-  pickupTimer = 3.5;
+  pickupTimer = 3.5; // pedal
   pickupMin = 6;
   pickupMax = 10;
 
+  // ➕ VIDA (menos frecuente que el pedal)
+  lifePickupTimer = 9;  // primer spawn ~9s
+  lifePickupMin = 12;   // luego entre 12..
+  lifePickupMax = 18;   // ..y 18s
+
   hasDistortion = false;
   ammo = 0;
+
+  /* ===== Modo Dios ===== */
+  godMode = false;
+  godTimer = 0;
+  godDuration = 15;          // ⬅ Ajustá la duración acá
+  godPickupTimer = 24;       // aparece tarde
+  godPickupMin = 28;
+  godPickupMax = 42;
+  godPickupsSpawned = 0;
+  godPickupsMax = 1;         // se decide en load()
+
+  // FX: halo + trail
+  godHalo = new PIXI.Graphics();
+  godHaloPulse = 0;
+  trailContainer = new PIXI.Container();
+  godTrail: { sp: PIXI.Graphics; life: number; max: number }[] = [];
+  godTrailTimer = 0;
 
   /* ===== Overlay fin/juego ===== */
   overlayTimer: number | null = null;
@@ -253,7 +282,7 @@ export class Level2 {
       g.zIndex = 750;
       this.finishSprite = g;
     }
-    this.finishSprite.position.set(this.screenX(this.lapFinishX), this.H - 160);
+    this.finishSprite.position.set(this.screenX(this.lapFinishX), this.ground.y + this.FINISH_Y_OFFSET);
     this.finishSprite.visible = true;
     this.world.addChild(this.finishSprite);
   }
@@ -298,8 +327,11 @@ export class Level2 {
     this.finishTexFinal    = await this.tryLoad((IMG as any).finishFinal);
     this.finishTexFallback = await this.tryLoad((IMG as any).finish ?? (IMG as any).finishFinal);
 
-    // pickup pedal
+    // pickups
     this.tex.pedal = await this.tryLoad(IMG.pedalDist);
+    this.tex.life  = await this.tryLoad((IMG as any).life ?? "/assets/img/life.png");
+    this.tex.god   = await this.tryLoad((IMG as any).god ?? "/assets/img/god.png");
+    this.godPickupsMax = Math.random() < 0.25 ? 2 : 1;
 
     /* Fondo 2x */
     if (this.tex.fondo) {
@@ -410,17 +442,23 @@ export class Level2 {
     this.lampGreen.position.set(spacing, 0);
     this.traffic.addChild(this.lampRed, this.lampYellow, this.lampGreen);
 
+    // panel overlay mejor con padding y alpha
     this.overlay.removeChildren();
-    const panel = new PIXI.Graphics().roundRect(0,0,420,220,18).fill(0x111111).stroke({ width:2, color:0x00d2ff });
-    panel.position.set((this.W-420)/2, (this.H-220)/2 - 30);
-    this.countdownText.position.set(panel.x + 210, panel.y + 70);
-    this.traffic.position.set(panel.x + 210, panel.y + 150);
+    const panelW = 560, panelH = 260;
+    const panel = new PIXI.Graphics()
+      .roundRect(0, 0, panelW, panelH, 24)
+      .fill({ color: 0x000000, alpha: 0.4 })
+      .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
+    const cx = (this.W - panelW) / 2;
+    const cy = (this.H - panelH) / 2 - 30;
+    panel.position.set(cx, cy);
+    const centerX = cx + panelW / 2;
+    const centerY = cy + panelH / 2;
+    this.countdownText.position.set(centerX, centerY - 34);
+    this.traffic.position.set(centerX, centerY + 62);
 
     this.overlay.addChild(panel, this.countdownText, this.traffic);
     this.overlay.visible = true;
-
-    this.setTrafficLights(true, false, false);
-    this.opts.audio?.playOne?.("countBeep");
   }
   private setTrafficLights(red: boolean, yellow: boolean, green: boolean) {
     (this.lampRed as any).tint = red ? 0xff0000 : 0x550000;
@@ -500,7 +538,7 @@ export class Level2 {
     }
   }
 
-  /* ===== Pickups (pedal / 10 tiros) ===== */
+  /* ===== Pickups ===== */
   private spawnPickup() {
     const x = this.camX + this.W + 200;
     const y = this.playerY - 40;
@@ -514,11 +552,92 @@ export class Level2 {
     this.world.addChild(sp);
     this.pickups.push({ sp, pos: { x, y }, kind: "distortion" });
   }
-  private givePickup(_p: Pickup) {
-    this.hasDistortion = true;
-    this.ammo = 10;
-    this.updateAmmoHud();
-    this.opts.audio?.playOne?.("pickup");
+
+  // ➕ vida
+  private spawnLifePickup() {
+    const x = this.camX + this.W + 200;
+    const y = this.playerY - 40;
+    const sp = new PIXI.Sprite(this.tex.life ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 800;
+    if (!this.tex.life) {
+      const g = new PIXI.Graphics().circle(0, 0, 10).fill(0x33dd33);
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "life" });
+  }
+
+  // ⭐ GOD pickup (muy raro)
+  private spawnGodPickup() {
+    if (this.godPickupsSpawned >= this.godPickupsMax) return;
+    const x = this.camX + this.W + 220;
+    const y = this.playerY - 60;
+    const sp = new PIXI.Sprite(this.tex.god ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 820;
+    if (!this.tex.god) {
+      const g = new PIXI.Graphics().circle(0, 0, 12).fill(0xffee66).stroke({ width: 2, color: 0xaa9900 });
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "god" });
+  }
+
+  private givePickup(p: Pickup) {
+    if (p.kind === "distortion") {
+      this.hasDistortion = true;
+      this.ammo = 10;
+      this.updateAmmoHud();
+      this.opts.audio?.playOne?.("pickup");
+    } else if (p.kind === "life") {
+      this.hp = Math.min(this.maxHP, this.hp + 25);
+      this.redrawHP();
+      this.opts.audio?.playOne?.("pickupLife");
+    } else if (p.kind === "god") {
+      this.setGod(true);
+      this.godPickupsSpawned++;
+      this.opts.audio?.playOne?.("pickupGod");
+    }
+  }
+
+  /* ===== GOD mode ===== */
+  private setGod(on: boolean) {
+    this.godMode = on;
+    if (on) {
+      this.godTimer = this.godDuration;
+      (this.player as any).tint = 0xffee66;
+      // halo visible
+      this.drawGodHalo();
+      this.godHalo.visible = true;
+      this.godHalo.alpha = 0.5;
+      this.godHaloPulse = 0;
+      // anuncio
+      this.showLapAnnounce("¡MODO DIOS!");
+    } else {
+      (this.player as any).tint = 0xffffff;
+      this.godHalo.visible = false;
+    }
+  }
+
+  private drawGodHalo() {
+    this.godHalo.clear();
+    this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 70, 36).fill({ color: 0xffd200, alpha: 0.22 });
+    this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 44, 18).fill({ color: 0xffffaa, alpha: 0.18 });
+    this.godHalo.zIndex = 990;
+  }
+
+  private emitGodTrail() {
+    for (let i = 0; i < 2; i++) {
+      const g = new PIXI.Graphics().roundRect(-10, -4, 20, 8, 4).fill(0xfff4b0);
+      g.alpha = 0.85;
+      g.position.set(
+        this.player.x - 30 + (Math.random() * 14 - 7),
+        this.player.y - this.jumpOffset + (Math.random() * 10 - 5)
+      );
+      this.trailContainer.addChild(g);
+      this.godTrail.push({ sp: g, life: 0.5, max: 0.5 });
+    }
   }
 
   /* ===== Mini-mapa por vuelta ===== */
@@ -641,9 +760,32 @@ export class Level2 {
     if (this.shootPlayerTimer > 0) { this.shootPlayerTimer -= dt; if (this.shootPlayerTimer <= 0) this.setPlayerTextureNormal(); }
     if (this.playerShotCd > 0) this.playerShotCd -= dt;
 
-    // velocidad (derecha = acelerar)
+    // GOD MODE: tiempo + FX
+    if (this.godMode) {
+      this.godTimer -= dt;
+      if (this.godTimer <= 0) {
+        this.setGod(false);
+      } else {
+        // halo sigue al jugador
+        this.godHalo.position.set(this.player.x, 0);
+        this.drawGodHalo();
+        // pulso
+        this.godHaloPulse += dt * 3;
+        const k = 0.5 + 0.2 * Math.sin(this.godHaloPulse * 4);
+        this.godHalo.alpha = k;
+        // trail
+        this.godTrailTimer -= dt;
+        if (this.godTrailTimer <= 0) {
+          this.emitGodTrail();
+          this.godTrailTimer = 0.03;
+        }
+      }
+    }
+
+    // velocidad (derecha = acelerar) — x2 en God
     const accelPressed = this.input.a.right && !this.controlsLocked;
-    const target = accelPressed ? this.maxSpeed : this.baseSpeed;
+    const boost = this.godMode ? 2.0 : 1.0;
+    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost;
     if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
     else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
 
@@ -695,6 +837,23 @@ export class Level2 {
     this.player.x = this.playerX;
     this.player.y = this.playerY - this.jumpOffset;
 
+    // actualizar trail (mover y desvanecer)
+    if (this.godTrail.length) {
+      for (const p of this.godTrail) {
+        p.sp.x -= (this.baseSpeed * 1.2) * dt;
+        p.life -= dt;
+        const a = Math.max(0, p.life / p.max);
+        p.sp.alpha = a * 0.85;
+        const s = 0.9 + 0.2 * (1 - a);
+        p.sp.scale.set(s);
+      }
+      this.godTrail = this.godTrail.filter(tp => {
+        if (tp.life > 0) return true;
+        try { tp.sp.destroy(); } catch {}
+        return false;
+      });
+    }
+
     // vueltas (por distancia)
     const playerWorldX = this.camX + this.player.x;
     if (!this.finished && playerWorldX >= this.lapFinishX) {
@@ -716,7 +875,7 @@ export class Level2 {
     }
 
     // meta sprite
-    if (this.finishSprite) { this.finishSprite.x = this.screenX(this.lapFinishX); this.finishSprite.y = this.ground.y; }
+    if (this.finishSprite) { this.finishSprite.x = this.screenX(this.lapFinishX); this.finishSprite.y = this.ground.y + this.FINISH_Y_OFFSET; }
 
     // fade del anuncio
     if (this.lapAnnounceTimer > 0) {
@@ -742,10 +901,13 @@ export class Level2 {
       if (gap > 450) catchup += 55;
       if (gap < -450) catchup -= 35;
 
+      // handicap cuando estás en Modo Dios
+      const godHandicap = this.godMode ? -120 : 0;
+
       const rivalMaxWhenYouBoost = this.maxSpeed - 15;
       const rivalMaxWhenCruise   = this.maxSpeed + 35;
 
-      const targetVBase = r.base + osc + catchup;
+      const targetVBase = r.base + osc + catchup + godHandicap;
       const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
       const minRival = this.baseSpeed + 40;
 
@@ -782,16 +944,12 @@ export class Level2 {
       // colisión con jugador (solo vivos)
       const pb = this.player.getBounds();
       const eb = e.sp.getBounds();
-   const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
-if (overlap && this.jumpOffset < 10 && !this.controlsLocked) {
-  this.playerX -= 50 * dt * 60;
-
-  // ⬅️ Sólo sonamos “crash” si REALMENTE hubo daño (no invuln)
-  if (this.hurtPlayer(8)) {
-    this.opts.audio?.playOne?.("crash");
-  }
-}}
-
+      const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
+      if (overlap && this.jumpOffset < 10 && !this.controlsLocked) {
+        this.playerX -= 50 * dt * 60;
+        if (this.hurtPlayer(8)) this.opts.audio?.playOne?.("crash"); // sólo suena si aplicó daño real
+      }
+    }
 
     // proyectiles enemigos
     for (const s of this.shots) {
@@ -800,13 +958,10 @@ if (overlap && this.jumpOffset < 10 && !this.controlsLocked) {
 
       const pb = this.player.getBounds(), sb = s.sp.getBounds();
       const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
-     if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
-  // ⬅️ Sólo sonamos si aplicó daño
-  if (this.hurtPlayer(12)) {
-    this.opts.audio?.playOne?.("impact");
-  }
-  s.pos.x = this.camX - 9999;
-}
+      if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
+        if (this.hurtPlayer(12)) this.opts.audio?.playOne?.("impact");
+        s.pos.x = this.camX - 9999;
+      }
     }
     this.shots = this.shots.filter(s => {
       const alive = s.pos.x > this.camX - 300 && s.pos.x < this.camX + this.W + 400 && s.pos.y > 0 && s.pos.y < this.H;
@@ -833,9 +988,27 @@ if (overlap && this.jumpOffset < 10 && !this.controlsLocked) {
     }
     this.playerShots = this.playerShots.filter(s => { const alive = s.pos.x < this.camX + this.W + 300; if (!alive) s.sp.destroy(); return alive; });
 
-    // pickups (mover, colisión, culling)
+    // pickups (mover, spawn, colisión, culling)
     this.pickupTimer -= dt;
-    if (this.pickupTimer <= 0 && !this.controlsLocked) { this.spawnPickup(); this.pickupTimer = this.pickupMin + Math.random() * (this.pickupMax - this.pickupMin); }
+    if (this.pickupTimer <= 0 && !this.controlsLocked) {
+      this.spawnPickup();
+      this.pickupTimer = this.pickupMin + Math.random() * (this.pickupMax - this.pickupMin);
+    }
+
+    // ➕ vida: timer independiente
+    this.lifePickupTimer -= dt;
+    if (this.lifePickupTimer <= 0 && !this.controlsLocked) {
+      this.spawnLifePickup();
+      this.lifePickupTimer = this.lifePickupMin + Math.random() * (this.lifePickupMax - this.lifePickupMin);
+    }
+
+    // ⭐ GOD pickup raro
+    this.godPickupTimer -= dt;
+    if (this.godPickupsSpawned < this.godPickupsMax && this.godPickupTimer <= 0 && !this.controlsLocked) {
+      this.spawnGodPickup();
+      this.godPickupTimer = this.godPickupMin + Math.random() * (this.godPickupMax - this.godPickupMin);
+    }
+
     for (const p of this.pickups) {
       p.pos.x -= this.baseSpeed * dt;
       p.sp.x = this.screenX(p.pos.x); p.sp.y = p.pos.y;
@@ -859,18 +1032,16 @@ if (overlap && this.jumpOffset < 10 && !this.controlsLocked) {
   }
 
   /* ===== daño ===== */
-
-private hurtPlayer(dmg: number): boolean {
-  if (this.invuln > 0 || this.ended || this.finished) return false; // ⬅️ no aplicó daño
-  this.hp = Math.max(0, this.hp - dmg);
-  this.invuln = this.invulnTime;
-  this.redrawHP();
-  this.setPlayerTextureHit();
-  this.opts.audio?.playOne?.("playerHit");
-  if (this.hp <= 0) this.endGame();
-  return true; // ⬅️ daño aplicado
-}
-
+  private hurtPlayer(dmg: number): boolean {
+    if (this.invuln > 0 || this.ended || this.finished || this.godMode) return false; // ⬅️ no aplicó daño
+    this.hp = Math.max(0, this.hp - dmg);
+    this.invuln = this.invulnTime;
+    this.redrawHP();
+    this.setPlayerTextureHit();
+    this.opts.audio?.playOne?.("playerHit");
+    if (this.hp <= 0) this.endGame();
+    return true; // ⬅️ daño aplicado
+  }
 
   /* ============================== Destroy ============================== */
   destroy() {
@@ -883,6 +1054,9 @@ private hurtPlayer(dmg: number): boolean {
     for (const s of this.shots)   { try { s.sp.destroy(); } catch {} }
     for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
     for (const p of this.pickups) { try { p.sp.destroy(); } catch {} }
+    for (const t of this.godTrail) { try { t.sp.destroy(); } catch {} }
+    try { this.godHalo.destroy(); } catch {}
+    try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
     this.ready = false;

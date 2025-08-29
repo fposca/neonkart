@@ -45,10 +45,12 @@ export type SfxOneName =
   | "enemyShoot"
   | "playerHit"
   | "playerShoot"
-  | "pickup"
+  | "pickupLife"
   | "crash"
   | "impact"
+  | "pickup"
   | "countBeep"
+  | "pickupGod"   // ⬅️ nuevo
   | "countGo";
 
 // Mapa de sonidos (solo sonidos; nada de imágenes aquí)
@@ -59,10 +61,13 @@ export const SFX: Record<SfxLoopName | SfxOneName, string> = {
   // one-shots gameplay
   enemyShoot: "/assets/sfx/sfx-reguetonero-ataque.mp3",
   playerHit:  "/assets/sfx/sfx-reguetonero-hit.mp3",
+  pickupGod:  "/assets/sfx/god-pickup.mp3",
   playerShoot:"/assets/sfx/sfx-guitarra-shot_1.mp3",
+  pickupLife: "/assets/sfx/pickup-life.mp3", // ← NUEVO
   pickup:     "/assets/sfx/sfx-pickup.mp3",
   crash:      "/assets/sfx/sfx-crash.mp3",
   impact:     "/assets/sfx/sfx-impact.mp3",
+  
 
   // UI / largada
   countBeep:  "/assets/sfx/ui-count-beep.mp3",
@@ -71,8 +76,8 @@ export const SFX: Record<SfxLoopName | SfxOneName, string> = {
 
 // ===== MÚSICA =====
 export const BGM: Record<"menu" | "nivel1", string> = {
-  menu:   "/assets/music/bgm-menu.ogg",
-  nivel1: "/assets/music/bgm-nivel1.ogg",
+  menu:   "/assets/music/bgm-menu.mp3",
+  nivel1: "/assets/music/bgm-nivel1.mp3",
 };
 
 

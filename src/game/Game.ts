@@ -5,11 +5,16 @@ import { Level3 } from "./Level3";
 import { Level4 } from "./Level4";
 import { Input } from "./input";
 import { AudioBus } from "./audio";
-import { withLoader } from "../ui/loader"; // ⬅ loader
+import { withLoader } from "../ui/loader"; // ⬅ overlay de niveles
+import { IMG } from "./assets";            // ⬅ para precarga
 
 type GameOpts = {
   onGameOver?: () => void;
   audio?: AudioBus; // permitir inyectar el bus de audio
+};
+
+type InitOpts = {
+  onProgress?: (p01: number) => void; // 0..1 progreso de precarga
 };
 
 export class Game {
@@ -26,7 +31,7 @@ export class Game {
     this.audio = opts.audio ?? new AudioBus();
   }
 
-  async init(canvasRoot: HTMLDivElement) {
+  async init(canvasRoot: HTMLDivElement, initOpts: InitOpts = {}) {
     // limpiar root
     while (canvasRoot.firstChild) canvasRoot.removeChild(canvasRoot.firstChild);
 
@@ -56,11 +61,58 @@ export class Game {
     this.app = app;
     this.input = new Input(canvasRoot);
 
+    // ⬇ PRELOAD paralela con porcentaje (antes de crear el primer nivel)
+    await this.preloadAssets(initOpts.onProgress);
+
     await this.initLevel1();
 
     // Audio inicial del juego
     this.audio.playBgmLevel1?.();
     this.audio.playSfx?.("motor");
+  }
+
+  /** Precarga todos los assets gráficos probables y reporta 0..1 */
+  private async preloadAssets(onProgress?: (p01: number) => void) {
+    // Lista de assets (incluye variantes/fallbacks que usan L1/L2/L3)
+    const urls = Array.from(
+      new Set(
+        [
+          // fondo/suelo base
+          IMG.fondo, IMG.suelo,
+          // variantes L2/L3 (si existen)
+          (IMG as any).fondo2, (IMG as any).suelo2,
+          (IMG as any).fondo3, (IMG as any).suelo3,
+          "/assets/img/menu-fondo2.jpg", "/assets/img/suelo2.jpg",
+          "/assets/img/menu-fondo3.jpg", "/assets/img/suelo3.jpg",
+          // jugador
+          IMG.kartSide, IMG.kartHit, IMG.kartDead, IMG.kartShoot,
+          // enemigos base
+          IMG.regSide, IMG.regShoot, IMG.regWreck,
+          // rivales posibles
+          (IMG as any).kartRival1, (IMG as any).kartRival2,
+          (IMG as any).kartRivalFredy, (IMG as any).kartFreddy, (IMG as any).kartFredy,
+          (IMG as any).kartingFreddy, (IMG as any)["karting-fredy"], (IMG as any)["karting-fredy.png"],
+          (IMG as any).kartRivalDoctor, (IMG as any).kartDoctor, (IMG as any).kartingDoctor,
+          (IMG as any)["karting-doctor"], (IMG as any)["karting-doctor.png"],
+          // metas
+          (IMG as any).finishLap1, (IMG as any).finishLap2, (IMG as any).finishFinal, (IMG as any).finish,
+          // pickup
+          (IMG as any).pedalDist ?? IMG.pedalDist,
+        ].filter(Boolean)
+      )
+    );
+
+    let done = 0;
+    const total = urls.length || 1;
+    const step = () => onProgress?.(++done / total);
+
+    await Promise.all(
+      urls.map(async (u) => {
+        try { await PIXI.Assets.load(u as string); }
+        catch { /* ignoramos fallos, hay fallbacks en los niveles */ }
+        finally { step(); }
+      })
+    );
   }
 
   async initLevel1() {

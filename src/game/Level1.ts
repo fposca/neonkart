@@ -24,7 +24,7 @@ type Enemy = {
 };
 
 type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" };
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
 
 type LevelOpts = {
   onGameOver?: () => void;
@@ -145,6 +145,12 @@ export class Level1 {
   pickupMin = 6;
   pickupMax = 10;
 
+  // life pickups
+  lifePickupTimer = 9;     // primer spawn ~9s
+  lifePickupMin = 12;      // luego entre 12..
+  lifePickupMax = 18;      // ..y 18s
+
+  // distorsión (arma)
   hasDistortion = false;
   distortTimer = 0;
   distortDuration = 10;
@@ -192,6 +198,24 @@ export class Level1 {
   lampYellow = new PIXI.Graphics();
   lampGreen = new PIXI.Graphics();
 
+  // ----- GOD MODE (estado + FX) -----
+  godMode = false;
+  godTimer = 0;
+  godDuration = 3; // segundos
+  // spawn MUY raro (1 por nivel, 25% chance de 2)
+  godPickupTimer = 24;   // primer intento tarde
+  godPickupMin = 28;
+  godPickupMax = 42;
+  godPickupsSpawned = 0;
+  godPickupsMax = 1;     // se decide en load()
+
+  // FX: halo + trail
+  godHalo = new PIXI.Graphics();
+  godHaloPulse = 0;
+  trailContainer = new PIXI.Container();
+  godTrail: { sp: PIXI.Graphics; life: number; max: number; }[] = [];
+  godTrailTimer = 0;
+
   // texturas
   tex: Record<string, PIXI.Texture | undefined> = {};
 
@@ -208,6 +232,12 @@ export class Level1 {
 
     // habilitar zIndex
     this.world.sortableChildren = true;
+
+    // preparar contenedores FX
+    this.godHalo.visible = false;
+    this.godHalo.zIndex = 990;       // debajo del player (1000)
+    this.trailContainer.zIndex = 985;
+    this.world.addChild(this.trailContainer, this.godHalo);
   }
 
   /* ============================ Helpers ================================== */
@@ -298,17 +328,25 @@ export class Level1 {
     this.tex.enemyAtk   = await this.tryLoad(IMG.regShoot);
     this.tex.enemyWreck = await this.tryLoad(IMG.regWreck);
 
+    // life
+    this.tex.life = await this.tryLoad((IMG as any).life ?? "/assets/img/life.png");
+
+    // GOD pickup
+    this.tex.god = await this.tryLoad((IMG as any).god ?? "/assets/img/god.png");
+    // suerte: a veces puede aparecer un segundo
+    this.godPickupsMax = Math.random() < 0.25 ? 2 : 1;
+
     // rivales
     this.tex.rival1 = await this.tryLoad((IMG as any).kartRival1) ?? (await this.tryLoad(IMG.regSide));
     this.tex.rival2 = await this.tryLoad((IMG as any).kartRival2) ?? (await this.tryLoad(IMG.regSide));
 
     // metas
-    this.finishTexLap1   = await this.tryLoad((IMG as any).finishLap1);
-    this.finishTexLap2   = await this.tryLoad((IMG as any).finishLap2);
-    this.finishTexFinal  = await this.tryLoad((IMG as any).finishFinal);
+    this.finishTexLap1     = await this.tryLoad((IMG as any).finishLap1);
+    this.finishTexLap2     = await this.tryLoad((IMG as any).finishLap2);
+    this.finishTexFinal    = await this.tryLoad((IMG as any).finishFinal);
     this.finishTexFallback = await this.tryLoad((IMG as any).finish ?? (IMG as any).finishFinal);
 
-    this.tex.pedal     = await this.tryLoad(IMG.pedalDist);
+    this.tex.pedal = await this.tryLoad(IMG.pedalDist);
 
     // fondo 2x
     if (this.tex.fondo) {
@@ -421,10 +459,22 @@ export class Level1 {
 
     // panel overlay centrado
     this.overlay.removeChildren();
-    const panel = new PIXI.Graphics().roundRect(0, 0, 420, 220, 18).fill(0x111111).stroke({ width: 2, color: 0x00d2ff });
-    panel.position.set((this.W - 420) / 2, (this.H - 220) / 2 - 30);
-    this.countdownText.position.set(panel.x + 210, panel.y + 70);
-    this.traffic.position.set(panel.x + 210, panel.y + 150);
+    const panelW = 560;
+    const panelH = 260;
+    const panel = new PIXI.Graphics()
+      .roundRect(0, 0, panelW, panelH, 24)
+      .fill({ color: 0x000000, alpha: 0.4 })
+      .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
+
+    const cx = (this.W - panelW) / 2;
+    const cy = (this.H - panelH) / 2 - 30;
+    panel.position.set(cx, cy);
+
+    const centerX = cx + panelW / 2;
+    const centerY = cy + panelH / 2;
+
+    this.countdownText.position.set(centerX, centerY - 34);
+    this.traffic.position.set(centerX, centerY + 62);
 
     this.overlay.addChild(panel, this.countdownText, this.traffic);
     this.overlay.visible = true;
@@ -514,7 +564,7 @@ export class Level1 {
     this.world.addChild(shot.sp);
     this.shots.push(shot);
 
-    this.opts.audio?.playOne("enemyShoot");
+    this.opts.audio?.playOne?.("enemyShoot");
     if (this.tex.enemyAtk) from.sp.texture = this.tex.enemyAtk;
     from.shootFlash = 0.18;
   }
@@ -554,35 +604,36 @@ export class Level1 {
 
     this.overlay.visible = true;
   }
-private levelComplete(place: 1 | 2 | 3) {
-  if (this.finished) return;
-  this.finished = true;
 
-  // Congelar juego/combate
-  this.controlsLocked = true;
-  this.invuln = 9999;
-  this.shotCooldown = 9999;   // enemigos no vuelven a disparar
-  this.enemyTimer = 9999;     // no spawnean más
-  this.pickupTimer = 9999;    // no salen más pickups
-  this.speed = 0;             // opcional: parar el scroll
+  private levelComplete(place: 1 | 2 | 3) {
+    if (this.finished) return;
+    this.finished = true;
 
-  // limpiar proyectiles en vuelo
-  for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
-  this.shots = [];
-  for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
-  this.playerShots = [];
+    // Congelar juego/combate
+    this.controlsLocked = true;
+    this.invuln = 9999;
+    this.shotCooldown = 9999;   // enemigos no vuelven a disparar
+    this.enemyTimer = 9999;     // no spawnean más
+    this.pickupTimer = 9999;    // no salen más pickups
+    this.lifePickupTimer = 9999;
+    this.godPickupTimer = 9999;
+    this.speed = 0;             // opcional: parar el scroll
 
-  const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
-  this.showResultOverlay(label);
+    // limpiar proyectiles en vuelo
+    for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
+    this.shots = [];
+    for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
+    this.playerShots = [];
 
-  if (this.overlayTimer) clearTimeout(this.overlayTimer);
-  this.overlayTimer = window.setTimeout(() => {
-    this.overlay.visible = false;
-    this.opts.onLevelComplete?.(place);
-  }, 1200); // ⬅️ más corto que antes
-}
+    const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
+    this.showResultOverlay(label);
 
-
+    if (this.overlayTimer) clearTimeout(this.overlayTimer);
+    this.overlayTimer = window.setTimeout(() => {
+      this.overlay.visible = false;
+      this.opts.onLevelComplete?.(place);
+    }, 1200);
+  }
 
   private endGame() {
     if (this.ended) return;
@@ -596,18 +647,19 @@ private levelComplete(place: 1 | 2 | 3) {
     }, 3000);
   }
 
-  // ✅ Ahora devuelve boolean: true sólo si aplicó daño (no invuln)
+  // ✅ gatea daño por invuln y por godMode
   private hurtPlayer(dmg: number): boolean {
-    if (this.invuln > 0 || this.ended) return false;
+    if (this.invuln > 0 || this.ended || this.godMode) return false;
     this.hp = Math.max(0, this.hp - dmg);
     this.invuln = this.invulnTime;
     this.redrawHP();
     this.setPlayerTextureHit();
-    this.opts.audio?.playOne("playerHit");
+    this.opts.audio?.playOne?.("playerHit");
     if (this.hp <= 0) this.endGame();
     return true;
   }
 
+  /* ============================== Pickups ================================ */
   private spawnPickup(){
     if (this.controlsLocked) return;
     const x = this.camX + this.W + 200;
@@ -623,13 +675,95 @@ private levelComplete(place: 1 | 2 | 3) {
     this.pickups.push({ sp, pos: { x, y }, kind: "distortion" });
   }
 
-  private givePickup(_p: Pickup){
-    this.hasDistortion = true;
-    this.distortTimer = this.distortDuration;
-    this.ammo = 10;
-    this.updateAmmoHud();
-    this.opts.audio?.playOne("pickup");
-    this.redrawPower();
+  private spawnLifePickup(){
+    if (this.controlsLocked) return;
+    const x = this.camX + this.W + 200;
+    const y = this.playerY - 40;
+    const sp = new PIXI.Sprite(this.tex.life ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 800;
+    if (!this.tex.life) {
+      const g = new PIXI.Graphics().circle(0,0,10).fill(0x33dd33);
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "life" });
+  }
+
+  private spawnGodPickup(){
+    if (this.controlsLocked || this.godPickupsSpawned >= this.godPickupsMax) return;
+    const x = this.camX + this.W + 220;
+    const y = this.playerY - 60;
+    const sp = new PIXI.Sprite(this.tex.god ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 820;
+    if (!this.tex.god) {
+      const g = new PIXI.Graphics().circle(0,0,12).fill(0xffee66).stroke({width:2,color:0xaa9900});
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "god" });
+  }
+
+  private givePickup(p: Pickup){
+    if (p.kind === "distortion") {
+      this.hasDistortion = true;
+      this.distortTimer = this.distortDuration;
+      this.ammo = 10;
+      this.updateAmmoHud();
+      this.opts.audio?.playOne?.("pickup");
+      this.redrawPower();
+    } else if (p.kind === "life") {
+      this.hp = Math.min(this.maxHP, this.hp + 25);
+      this.redrawHP();
+      this.opts.audio?.playOne?.("pickupLife");
+    } else if (p.kind === "god") {
+      this.setGod(true);
+      this.godPickupsSpawned++; // cuenta esta toma
+      this.opts.audio?.playOne?.("pickupGod"); // SFX dedicado
+    }
+  }
+
+  private setGod(on: boolean) {
+    this.godMode = on;
+    if (on) {
+      this.godTimer = this.godDuration;
+      (this.player as any).tint = 0xffee66;
+
+      // halo visible
+      this.drawGodHalo();
+      this.godHalo.visible = true;
+      this.godHalo.alpha = 0.5;
+      this.godHaloPulse = 0;
+
+      // cartelito
+      this.showLapAnnounce("¡MODO DIOS!");
+    } else {
+      (this.player as any).tint = 0xffffff;
+      this.godHalo.visible = false;
+    }
+  }
+
+  private drawGodHalo(){
+    this.godHalo.clear();
+    // halo doble elíptico detrás del kart
+    this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 70, 36).fill({ color: 0xffd200, alpha: 0.22 });
+    this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 44, 18).fill({ color: 0xffffaa, alpha: 0.18 });
+    this.godHalo.zIndex = 990;
+  }
+
+  private emitGodTrail(){
+    // dos nubecitas por tick
+    for (let i = 0; i < 2; i++) {
+      const g = new PIXI.Graphics().roundRect(-10, -4, 20, 8, 4).fill(0xfff4b0);
+      g.alpha = 0.85;
+      g.position.set(
+        this.player.x - 30 + (Math.random() * 14 - 7),
+        this.player.y - this.jumpOffset + (Math.random() * 10 - 5)
+      );
+      this.trailContainer.addChild(g);
+      this.godTrail.push({ sp: g, life: 0.5, max: 0.5 });
+    }
   }
 
   private playerFire(){
@@ -653,7 +787,7 @@ private levelComplete(place: 1 | 2 | 3) {
     this.world.addChild(shot.sp);
     this.playerShots.push(shot);
     this.playerShotCd = this.playerShotCdMax;
-    this.opts.audio?.playOne("playerShoot");
+    this.opts.audio?.playOne?.("playerShoot");
 
     // gastar bala
     this.ammo--; this.updateAmmoHud();
@@ -694,11 +828,11 @@ private levelComplete(place: 1 | 2 | 3) {
         if (this.countdown === 3) {
           this.countdown = 2; this.countdownText.text = "2"; this.countdownTimer = 1.0;
           this.setTrafficLights(true, true, false);
-          this.opts.audio?.playOne("countBeep");
+          this.opts.audio?.playOne?.("countBeep");
         } else if (this.countdown === 2) {
           this.countdown = 1; this.countdownText.text = "1"; this.countdownTimer = 1.0;
           this.setTrafficLights(true, true, false);
-          this.opts.audio?.playOne("countBeep");
+          this.opts.audio?.playOne?.("countBeep");
         } else if (this.countdown === 1) {
           this.countdown = 0;
           this.countdownText.text = "GO!";
@@ -706,7 +840,7 @@ private levelComplete(place: 1 | 2 | 3) {
           this.goFlashTimer = 0.6;
           this.countdownTimer = 0.4;
           this.setTrafficLights(false, false, true);
-          this.opts.audio?.playOne("countGo");
+          this.opts.audio?.playOne?.("countGo");
         } else {
           this.overlay.removeChildren();
           this.overlay.visible = false;
@@ -752,17 +886,42 @@ private levelComplete(place: 1 | 2 | 3) {
       }
     }
 
-    // timers
+    // timers básicos
     if (this.invuln > 0) this.invuln -= dt;
     if (this.hitTimer > 0) { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setPlayerTextureNormal(); }
     if (this.shootPlayerTimer > 0) { this.shootPlayerTimer -= dt; if (this.shootPlayerTimer <= 0) this.setPlayerTextureNormal(); }
     if (this.playerShotCd > 0) this.playerShotCd -= dt;
+
+    // distorsión (arma) por tiempo
     if (this.hasDistortion) {
       this.distortTimer -= dt;
       if (this.distortTimer <= 0) { this.hasDistortion = false; this.redrawPower(); }
     }
 
-    // Fade del anuncio de vuelta (2s)
+    // GOD MODE: countdown + FX (halo/trail)
+    if (this.godMode) {
+      this.godTimer -= dt;
+      if (this.godTimer <= 0) {
+        this.setGod(false);
+      } else {
+        // halo sigue al jugador
+        this.godHalo.position.set(this.player.x, 0); // x = jugador (mismo mundo)
+        this.drawGodHalo(); // redibuja a la altura actual del jugador
+        // pulso
+        this.godHaloPulse += dt * 3;
+        const k = 0.5 + 0.2 * Math.sin(this.godHaloPulse * 4);
+        this.godHalo.alpha = k;
+
+        // trail
+        this.godTrailTimer -= dt;
+        if (this.godTrailTimer <= 0) {
+          this.emitGodTrail();
+          this.godTrailTimer = 0.03; // ~30-35 fps de partículas
+        }
+      }
+    }
+
+    // fade del anuncio de vuelta (2s)
     if (this.lapAnnounceTimer > 0) {
       this.lapAnnounceTimer -= dt;
       const t = Math.max(0, this.lapAnnounceTimer);
@@ -773,9 +932,10 @@ private levelComplete(place: 1 | 2 | 3) {
       }
     }
 
-    // velocidad jugador
+    // velocidad jugador (x2 en godMode)
     const accelPressed = this.input.a.right && !this.controlsLocked;
-    const target = accelPressed ? this.maxSpeed : this.baseSpeed;
+    const boost = this.godMode ? 2.0 : 1.0;
+    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost;
     if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
     else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
 
@@ -810,6 +970,25 @@ private levelComplete(place: 1 | 2 | 3) {
     this.player.x = this.playerX;
     this.player.y = this.playerY - this.jumpOffset;
 
+    // actualizar trail (mover y desvanecer)
+    if (this.godTrail.length) {
+      for (const p of this.godTrail) {
+        // mover ligeramente hacia la izquierda (referencia a parallax del mundo)
+        p.sp.x -= (this.baseSpeed * 1.2) * dt;
+        p.life -= dt;
+        const a = Math.max(0, p.life / p.max);
+        p.sp.alpha = a * 0.85;
+        const s = 0.9 + 0.2 * (1 - a);
+        p.sp.scale.set(s);
+      }
+      // limpiar
+      this.godTrail = this.godTrail.filter(tp => {
+        if (tp.life > 0) return true;
+        try { tp.sp.destroy(); } catch {}
+        return false;
+      });
+    }
+
     // meta: posición fija en worldX de la vuelta actual
     if (this.finishSprite) {
       this.finishSprite.x = this.screenX(this.lapFinishX);
@@ -838,7 +1017,10 @@ private levelComplete(place: 1 | 2 | 3) {
       const rivalMaxWhenYouBoost = this.maxSpeed - 15; // vos 520, ellos ~505
       const rivalMaxWhenCruise   = this.maxSpeed + 35; // si no acelerás, pueden 555
 
-      const targetVBase = (r.base ?? 460) + osc + catchup + jitter;
+      // handicap durante godMode (les cuesta seguirte)
+      const godHandicap = this.godMode ? -120 : 0;
+
+      const targetVBase = (r.base ?? 460) + osc + catchup + jitter + godHandicap;
       const maxRival = accelPressed ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
       const minRival = this.baseSpeed + 40;
 
@@ -879,7 +1061,7 @@ private levelComplete(place: 1 | 2 | 3) {
     for (const e of this.enemies) {
       e.pos.x -= e.speed * dt;
       e.sp.x = this.screenX(e.pos.x);
-      e.sp.y = e.pos.y;
+      e.sp.y = this.playerY;
 
       if (e.shootFlash > 0) {
         e.shootFlash -= dt;
@@ -897,9 +1079,9 @@ private levelComplete(place: 1 | 2 | 3) {
           e.pos.x += 100 * dt;
           const minKeep = this.baseSpeed * 0.7; if (this.speed < minKeep) this.speed = minKeep;
 
-          // ✅ solo sonar/dañar una vez gracias a invuln
+          // ✅ solo sonar/dañar una vez gracias a invuln/god
           if (this.hurtPlayer(6)) {
-            this.opts.audio?.playOne("crash");
+            this.opts.audio?.playOne?.("crash");
           }
         }
       }
@@ -915,7 +1097,7 @@ private levelComplete(place: 1 | 2 | 3) {
       if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
         // ✅ gateado: sólo si realmente dañó
         if (this.hurtPlayer(12)) {
-          this.opts.audio?.playOne("impact");
+          this.opts.audio?.playOne?.("impact");
         }
         s.pos.x = this.camX - 9999;
       }
@@ -928,7 +1110,25 @@ private levelComplete(place: 1 | 2 | 3) {
 
     // pickups
     this.pickupTimer -= dt;
-    if (this.pickupTimer <= 0) { this.spawnPickup(); this.pickupTimer = this.pickupMin + Math.random() * (this.pickupMax - this.pickupMin); }
+    if (this.pickupTimer <= 0) {
+      this.spawnPickup();
+      this.pickupTimer = this.pickupMin + Math.random() * (this.pickupMax - this.pickupMin);
+    }
+
+    this.lifePickupTimer -= dt;
+    if (this.lifePickupTimer <= 0) {
+      this.spawnLifePickup();
+      this.lifePickupTimer = this.lifePickupMin + Math.random() * (this.lifePickupMax - this.lifePickupMin);
+    }
+
+    // GOD pickup raro
+    this.godPickupTimer -= dt;
+    if (this.godPickupsSpawned < this.godPickupsMax && this.godPickupTimer <= 0) {
+      this.spawnGodPickup();
+      // no contamos acá (contamos al agarrarlo); reiniciamos el temporizador
+      this.godPickupTimer = this.godPickupMin + Math.random() * (this.godPickupMax - this.godPickupMin);
+    }
+
     for (const p of this.pickups) {
       p.pos.x -= this.baseSpeed * dt;
       p.sp.x = this.screenX(p.pos.x); p.sp.y = p.pos.y;
@@ -956,6 +1156,7 @@ private levelComplete(place: 1 | 2 | 3) {
             e.dead = true;
             if (this.tex.enemyWreck) e.sp.texture = this.tex.enemyWreck;
             e.speed = this.baseSpeed;
+            this.opts.audio?.playOne?.("crash");
           }
         }
       }
@@ -980,6 +1181,9 @@ private levelComplete(place: 1 | 2 | 3) {
     for (const s of this.shots)   { try { s.sp.destroy(); } catch {} }
     for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
     for (const p of this.pickups) { try { p.sp.destroy(); } catch {} }
+    for (const t of this.godTrail) { try { t.sp.destroy(); } catch {} }
+    try { this.godHalo.destroy(); } catch {}
+    try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
   }
