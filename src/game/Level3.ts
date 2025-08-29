@@ -91,7 +91,7 @@ export class Level3 {
   camX = 0;
   trackLength = 9000;            // <- vueltas más largas que L1/L2
   lapFinishX = this.trackLength; // worldX de meta de la vuelta actual
-  lapsTotal = 2;                // <- cambiable: p.ej. 24 vueltas
+  lapsTotal = 25;                // <- cambiable: p.ej. 24 vueltas
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -277,7 +277,6 @@ export class Level3 {
   private updateAmmoHud() { this.ammoText.text = this.hasDistortion ? `Ammo: ${this.ammo}` : ""; }
   private updateLapHud() { this.lapText.text = `VUELTA ${this.lap}/${this.lapsTotal}`; }
 
-  private totalTrackLen() { return this.trackLength * this.lapsTotal; }
 
   // progreso vuelta actual (0..1)
   private lapProgressFor(worldX: number) {
@@ -327,8 +326,8 @@ export class Level3 {
   /* =============================== Carga ================================= */
   async load() {
     // FONDO / SUELO (intenta variantes L3 y cae a L1 si no existen)
-    const fondo3 = (IMG as any).fondo3 ?? (IMG as any)["menu-fondo3"] ?? "/assets/img/menu-fondo3.png";
-    const suelo3 = (IMG as any).suelo3 ?? "/assets/img/suelo3.png";
+    const fondo3 = (IMG as any).fondo3 ?? (IMG as any)["menu-fondo3"] ?? "/assets/img/menu-fondo3.jpg";
+    const suelo3 = (IMG as any).suelo3 ?? "/assets/img/suelo3.jpg";
     this.tex.fondo = (await this.tryLoad(fondo3)) ?? (await this.tryLoad(IMG.fondo));
     this.tex.suelo = (await this.tryLoad(suelo3)) ?? (await this.tryLoad(IMG.suelo));
 
@@ -870,13 +869,17 @@ export class Level3 {
           const pb = this.player.getBounds();
           const eb = e.sp.getBounds();
           const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
-          if (overlap) {
-            this.playerX -= 50 * dt * 60;
-            e.pos.x += 100 * dt;
-            const minKeep = this.baseSpeed * 0.7; if (this.speed < minKeep) this.speed = minKeep;
-            this.hurtPlayer(6);
-            this.opts.audio?.playOne?.("crash");
-          }
+        if (overlap && !this.controlsLocked) {
+  this.playerX -= 50 * dt * 60;
+  e.pos.x += 100 * dt;
+  const minKeep = this.baseSpeed * 0.7; if (this.speed < minKeep) this.speed = minKeep;
+
+  // ⬅️ Sonar solo si realmente aplicó daño (no invuln)
+  if (this.hurtPlayer(6)) {
+    this.opts.audio?.playOne?.("crash");
+  }
+}
+
         }
       } else {
         // torretas: quedan fijas (se “alejan” por la cámara)
@@ -892,16 +895,20 @@ export class Level3 {
         }
 
         // colisión con jugador si no está muerta
-        if (!e.dead && this.jumpOffset < 10) {
-          const pb = this.player.getBounds();
-          const eb = e.sp.getBounds();
-          const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
-          if (overlap) {
-            this.playerX -= 50 * dt * 60;
-            this.hurtPlayer(8);
-            this.opts.audio?.playOne?.("crash");
-          }
-        }
+       if (!e.dead && this.jumpOffset < 10) {
+  const pb = this.player.getBounds();
+  const eb = e.sp.getBounds();
+  const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
+  if (overlap && !this.controlsLocked) {
+    this.playerX -= 50 * dt * 60;
+
+    // ⬅️ Sonar solo si aplicó daño
+    if (this.hurtPlayer(8)) {
+      this.opts.audio?.playOne?.("crash");
+    }
+  }
+}
+
       }
     }
 
@@ -1020,15 +1027,18 @@ export class Level3 {
   }
 
   /* ============================== Daño player ============================ */
-  private hurtPlayer(dmg: number) {
-    if (this.invuln > 0 || this.ended) return;
-    this.hp = Math.max(0, this.hp - dmg);
-    this.invuln = this.invulnTime;
-    this.redrawHP();
-    this.setPlayerTextureHit();
-    this.opts.audio?.playOne?.("playerHit");
-    if (this.hp <= 0) this.endGame();
-  }
+/* ============================== Daño player ============================ */
+private hurtPlayer(dmg: number): boolean {
+  if (this.invuln > 0 || this.ended || this.finished) return false; // ⬅️ nada de daño
+  this.hp = Math.max(0, this.hp - dmg);
+  this.invuln = this.invulnTime;
+  this.redrawHP();
+  this.setPlayerTextureHit();
+  this.opts.audio?.playOne?.("playerHit");
+  if (this.hp <= 0) this.endGame();
+  return true; // ⬅️ daño aplicado
+}
+
 
   /* ============================== Destroy ================================ */
   destroy() {

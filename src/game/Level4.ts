@@ -59,7 +59,7 @@ export class Level4 {
 
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer);
-    this.stage.addChild(this.bgShade); // << oscurecedor por encima del fondo
+    this.stage.addChild(this.bgShade); // “modo noche” por encima del fondo
     this.stage.addChild(this.world);
     this.stage.addChild(this.hud);
     this.stage.addChild(this.overlay);
@@ -89,7 +89,7 @@ export class Level4 {
   /* ===== Suelo ===== */
   ground!: PIXI.TilingSprite;
 
-  /* ===== Pista / vueltas (más largo y más vueltas) ===== */
+  /* ===== Pista / vueltas ===== */
   camX = 0;
   trackLength = 10000;           // más largo que L3
   lapFinishX = this.trackLength;
@@ -296,64 +296,57 @@ export class Level4 {
 
   /* =============================== Carga ================================= */
   async load() {
-    // Fondo/Suelo alternativos si existen (fondo4/suelo4) con fallback
- // === Arte L4 (fondo/suelo + rivales) ===
-const fondo4 = (IMG as any).fondo4 ?? "/assets/img/fondo4.png";
-const suelo4 = (IMG as any).suelo4 ?? "/assets/img/suelo4.png";
-// === Jugador ===
-this.tex.kart      = await this.tryLoad(IMG.kartSide);
-this.tex.kartHit   = await this.tryLoad(IMG.kartHit);
-this.tex.kartDead  = await this.tryLoad(IMG.kartDead);
-this.tex.kartShoot = await this.tryLoad(IMG.kartShoot);
+    // === Arte L4 (fondo/suelo + rivales) ===
+    const fondo4 = (IMG as any).fondo4 ?? "/assets/img/fondo4.png";
+    const suelo4 = (IMG as any).suelo4 ?? "/assets/img/suelo4.png";
 
-// === Enemigos / torretas ===
-// (usa arte alternativo si existiera; si no, cae al arte "reg")
-this.tex.enemy      =
-  (await this.tryLoad((IMG as any).enemy2Side))  ?? (await this.tryLoad(IMG.regSide));
-this.tex.enemyAtk   =
-  (await this.tryLoad((IMG as any).enemy2Shoot)) ?? (await this.tryLoad(IMG.regShoot));
-this.tex.enemyWreck =
-  (await this.tryLoad((IMG as any).enemy2Wreck)) ?? (await this.tryLoad(IMG.regWreck));
+    // === Jugador ===
+    this.tex.kart      = await this.tryLoad(IMG.kartSide);
+    this.tex.kartHit   = await this.tryLoad(IMG.kartHit);
+    this.tex.kartDead  = await this.tryLoad(IMG.kartDead);
+    this.tex.kartShoot = await this.tryLoad(IMG.kartShoot);
 
-// === Metas (carteles de vuelta) ===
-this.finishTexLap1     = await this.tryLoad((IMG as any).finishLap1);
-this.finishTexLap2     = await this.tryLoad((IMG as any).finishLap2);
-this.finishTexFinal    = await this.tryLoad((IMG as any).finishFinal);
-this.finishTexFallback = await this.tryLoad((IMG as any).finish ?? (IMG as any).finishFinal);
+    // === Enemigos / torretas ===
+    this.tex.enemy      = (await this.tryLoad((IMG as any).enemy2Side))  ?? (await this.tryLoad(IMG.regSide));
+    this.tex.enemyAtk   = (await this.tryLoad((IMG as any).enemy2Shoot)) ?? (await this.tryLoad(IMG.regShoot));
+    this.tex.enemyWreck = (await this.tryLoad((IMG as any).enemy2Wreck)) ?? (await this.tryLoad(IMG.regWreck));
 
-// === Pickup pedal (distortion) ===
-this.tex.pedal = await this.tryLoad((IMG as any).pedalDist ?? IMG.pedalDist);
-this.tex.fondo = (await this.tryLoad(fondo4)) ?? (await this.tryLoad(IMG.fondo));
-this.tex.suelo  = (await this.tryLoad(suelo4))  ?? (await this.tryLoad(IMG.suelo));
+    // === Metas ===
+    this.finishTexLap1     = await this.tryLoad((IMG as any).finishLap1);
+    this.finishTexLap2     = await this.tryLoad((IMG as any).finishLap2);
+    this.finishTexFinal    = await this.tryLoad((IMG as any).finishFinal);
+    this.finishTexFallback = await this.tryLoad((IMG as any).finish ?? (IMG as any).finishFinal);
 
-// Rivales nuevos
-this.tex.rival1 =
-  (await this.tryLoad((IMG as any).kartEmet)) ??
-  (await this.tryLoad("/assets/img/karting-emet.png")) ??
-  this.tex.enemy;
+    // === Pickup pedal ===
+    this.tex.pedal = await this.tryLoad((IMG as any).pedalDist ?? IMG.pedalDist);
 
-this.tex.rival2 =
-  (await this.tryLoad((IMG as any).kartBrujo)) ??
-  (await this.tryLoad("/assets/img/karting-brujo.png")) ??
-  this.tex.enemy;
+    // === Fondo/Suelo (con fallback) ===
+    this.tex.fondo = (await this.tryLoad(fondo4)) ?? (await this.tryLoad(IMG.fondo));
+    this.tex.suelo = (await this.tryLoad(suelo4)) ?? (await this.tryLoad(IMG.suelo));
 
-// ---------- Fondo 2x ----------
-if (this.tex.fondo) {
-  const t = this.tex.fondo;
-  const sx = this.W / t.width, sy = this.H / t.height;
-  this.bgWidthScaled = this.W;
-  this.bg1 = new PIXI.Sprite(t); this.bg1.scale.set(sx, sy); this.bg1.x = 0;
-  this.bg2 = new PIXI.Sprite(t); this.bg2.scale.set(sx, sy); this.bg2.x = this.bgWidthScaled;
-} else {
-  const t = this.app.renderer.generateTexture(
-    new PIXI.Graphics().rect(0,0,this.W,this.H).fill(0x1a1a1a)
-  );
-  this.bg1.texture = t; this.bg2.texture = t; this.bg2.x = this.W; this.bgWidthScaled = this.W;
-}
-this.bgLayer.addChild(this.bg1, this.bg2);
+    // Rivales nuevos
+    this.tex.rival1 =
+      (await this.tryLoad((IMG as any).kartEmet)) ??
+      (await this.tryLoad("/assets/img/karting-emet.png")) ??
+      this.tex.enemy;
 
-// (si usás el “modo noche”, dejalo después de esto)
+    this.tex.rival2 =
+      (await this.tryLoad((IMG as any).kartBrujo)) ??
+      (await this.tryLoad("/assets/img/karting-brujo.png")) ??
+      this.tex.enemy;
 
+    // ---------- Fondo 2x ----------
+    if (this.tex.fondo) {
+      const t = this.tex.fondo;
+      const sx = this.W / t.width, sy = this.H / t.height;
+      this.bgWidthScaled = this.W;
+      this.bg1 = new PIXI.Sprite(t); this.bg1.scale.set(sx, sy); this.bg1.x = 0;
+      this.bg2 = new PIXI.Sprite(t); this.bg2.scale.set(sx, sy); this.bg2.x = this.bgWidthScaled;
+    } else {
+      const t = this.app.renderer.generateTexture(new PIXI.Graphics().rect(0,0,this.W,this.H).fill(0x1a1a1a));
+      this.bg1.texture = t; this.bg2.texture = t; this.bg2.x = this.W; this.bgWidthScaled = this.W;
+    }
+    this.bgLayer.addChild(this.bg1, this.bg2);
 
     // “Modo noche”: lámina negra semitransparente encima del fondo
     this.bgShade.clear().rect(0, 0, this.W, this.H).fill(0x000000);
@@ -507,7 +500,7 @@ this.bgLayer.addChild(this.bg1, this.bg2);
 
     const sp = new PIXI.Sprite(this.tex.enemy ?? PIXI.Texture.WHITE);
     sp.anchor.set(0.5, 0.8);
-    sp.zIndex = 760; // ligeramente por encima de torretas/rivales para claridad
+    sp.zIndex = 760; // por encima de torretas/rivales
     if (!this.tex.enemy) {
       const g = new PIXI.Graphics().rect(-24,-16,48,32).fill(0x27ae60);
       sp.texture = this.app.renderer.generateTexture(g);
@@ -538,7 +531,7 @@ this.bgLayer.addChild(this.bg1, this.bg2);
   }
 
   private spawnEnemy() {
-    // 70% runner / 30% torreta en L4 (un poco más frenético)
+    // 70% runner / 30% torreta en L4
     if (Math.random() < 0.70) this.spawnRunner(); else this.spawnTurret();
   }
 
@@ -549,7 +542,7 @@ this.bgLayer.addChild(this.bg1, this.bg2);
     const sy = from.pos.y - 24;
     const dx = this.player.x, dy = this.player.y - 10;
     const ang = Math.atan2(dy - sy, dx - sx);
-    const v = 480; // balas un toque más rápidas
+    const v = 480; // balas más rápidas
 
     const color = from.kind === "turret" ? 0xff5533 : 0x00ccff;
     const shot: Shot = {
@@ -803,16 +796,18 @@ this.bgLayer.addChild(this.bg1, this.bg2);
           if (R.shootFlash <= 0 && !R.dead && this.tex.enemy) e.sp.texture = this.tex.enemy;
         }
 
+        // ⬇️ SFX crash solo si hubo daño real
         if (!e.dead && this.jumpOffset < 10) {
           const pb = this.player.getBounds();
           const eb = e.sp.getBounds();
           const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
-          if (overlap) {
+          if (overlap && !this.controlsLocked) {
             this.playerX -= 50 * dt * 60;
             e.pos.x += 100 * dt;
             const minKeep = this.baseSpeed * 0.75; if (this.speed < minKeep) this.speed = minKeep;
-            this.hurtPlayer(7); // un poco más de daño
-            this.opts.audio?.playOne?.("crash");
+            if (this.hurtPlayer(7)) {              // ⬅️ gatea por invuln
+              this.opts.audio?.playOne?.("crash");
+            }
           }
         }
       } else {
@@ -826,20 +821,22 @@ this.bgLayer.addChild(this.bg1, this.bg2);
           e.shootCd = 0.6 + Math.random() * 0.7;
         }
 
+        // ⬇️ SFX crash solo si hubo daño real
         if (!e.dead && this.jumpOffset < 10) {
           const pb = this.player.getBounds();
           const eb = e.sp.getBounds();
           const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
-          if (overlap) {
+          if (overlap && !this.controlsLocked) {
             this.playerX -= 50 * dt * 60;
-            this.hurtPlayer(9);
-            this.opts.audio?.playOne?.("crash");
+            if (this.hurtPlayer(9)) {              // ⬅️ gatea por invuln
+              this.opts.audio?.playOne?.("crash");
+            }
           }
         }
       }
     }
 
-    // disparo enemigo
+    // disparo enemigo (balas) — ⬇️ “impact” sólo si hubo daño
     for (const s of this.shots) {
       s.pos.x += s.vx * dt;
       s.pos.y += s.vy * dt;
@@ -849,8 +846,9 @@ this.bgLayer.addChild(this.bg1, this.bg2);
       const pb = this.player.getBounds(), sb = s.sp.getBounds();
       const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
       if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
-        this.opts.audio?.playOne?.("impact");
-        this.hurtPlayer(13); // más daño
+        if (this.hurtPlayer(13)) {                 // ⬅️ gatea por invuln
+          this.opts.audio?.playOne?.("impact");
+        }
         s.pos.x = this.camX - 9999;
       }
     }
@@ -947,14 +945,15 @@ this.bgLayer.addChild(this.bg1, this.bg2);
   }
 
   /* ============================== Daño player ============================ */
-  private hurtPlayer(dmg: number) {
-    if (this.invuln > 0 || this.ended) return;
+  private hurtPlayer(dmg: number): boolean {
+    if (this.invuln > 0 || this.ended || this.finished) return false; // nada de daño
     this.hp = Math.max(0, this.hp - dmg);
     this.invuln = this.invulnTime;
     this.redrawHP();
     this.setPlayerTextureHit();
     this.opts.audio?.playOne?.("playerHit");
     if (this.hp <= 0) this.endGame();
+    return true; // daño aplicado
   }
 
   /* ============================== Destroy ================================ */

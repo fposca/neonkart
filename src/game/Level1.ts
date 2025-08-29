@@ -42,6 +42,7 @@ export class Level1 {
   readonly W = 1280;
   readonly H = 720;
 
+  readonly FINISH_Y_OFFSET = 54;
   // capas
   stage = new PIXI.Container();
   bgLayer = new PIXI.Container();
@@ -70,7 +71,7 @@ export class Level1 {
   finishTexFallback?: PIXI.Texture;
 
   // vueltas (MODO DISTANCIA)
-  lapsTotal = 1;
+  lapsTotal = 20;
   lap = 1;
   lapText = new PIXI.Text({
     text: "VUELTA 1/20",
@@ -214,7 +215,6 @@ export class Level1 {
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private screenX(worldX: number) { return worldX - this.camX; }
   private clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
-  private totalTrackLen() { return this.trackLength * this.lapsTotal; }
 
   private fmt(ms: number) {
     const m = Math.floor(ms / 60000);
@@ -265,7 +265,7 @@ export class Level1 {
       g.zIndex = 750;
       this.finishSprite = g;
     }
-    this.finishSprite.position.set(this.screenX(this.lapFinishX), this.ground.y);
+    this.finishSprite.position.set(this.screenX(this.lapFinishX), this.ground.y + this.FINISH_Y_OFFSET);
     this.finishSprite.visible = true;
     this.world.addChild(this.finishSprite);
   }
@@ -554,18 +554,35 @@ export class Level1 {
 
     this.overlay.visible = true;
   }
+private levelComplete(place: 1 | 2 | 3) {
+  if (this.finished) return;
+  this.finished = true;
 
-  private levelComplete(place: 1 | 2 | 3) {
-    if (this.finished) return;
-    this.finished = true;
-    const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
-    this.showResultOverlay(label);
-    if (this.overlayTimer) clearTimeout(this.overlayTimer);
-    this.overlayTimer = window.setTimeout(() => {
-      this.overlay.visible = false;
-      this.opts.onLevelComplete?.(place);
-    }, 3000);
-  }
+  // Congelar juego/combate
+  this.controlsLocked = true;
+  this.invuln = 9999;
+  this.shotCooldown = 9999;   // enemigos no vuelven a disparar
+  this.enemyTimer = 9999;     // no spawnean más
+  this.pickupTimer = 9999;    // no salen más pickups
+  this.speed = 0;             // opcional: parar el scroll
+
+  // limpiar proyectiles en vuelo
+  for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
+  this.shots = [];
+  for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
+  this.playerShots = [];
+
+  const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
+  this.showResultOverlay(label);
+
+  if (this.overlayTimer) clearTimeout(this.overlayTimer);
+  this.overlayTimer = window.setTimeout(() => {
+    this.overlay.visible = false;
+    this.opts.onLevelComplete?.(place);
+  }, 1200); // ⬅️ más corto que antes
+}
+
+
 
   private endGame() {
     if (this.ended) return;
@@ -579,17 +596,16 @@ export class Level1 {
     }, 3000);
   }
 
-  /* =============================== Gameplay ============================== */
-  private redrawAllHud() { this.redrawHP(); this.redrawPower(); this.updateAmmoHud(); this.updateLapHud(); }
-
-  private hurtPlayer(dmg: number) {
-    if (this.invuln > 0 || this.ended) return;
+  // ✅ Ahora devuelve boolean: true sólo si aplicó daño (no invuln)
+  private hurtPlayer(dmg: number): boolean {
+    if (this.invuln > 0 || this.ended) return false;
     this.hp = Math.max(0, this.hp - dmg);
     this.invuln = this.invulnTime;
     this.redrawHP();
     this.setPlayerTextureHit();
     this.opts.audio?.playOne("playerHit");
     if (this.hp <= 0) this.endGame();
+    return true;
   }
 
   private spawnPickup(){
@@ -732,7 +748,7 @@ export class Level1 {
         const rivalsAhead = this.rivals.filter(r => r.pos.x >= this.lapFinishX).length;
         const place = (1 + rivalsAhead) as 1 | 2 | 3;
         this.levelComplete(place);
-        break;
+        return;
       }
     }
 
@@ -797,7 +813,7 @@ export class Level1 {
     // meta: posición fija en worldX de la vuelta actual
     if (this.finishSprite) {
       this.finishSprite.x = this.screenX(this.lapFinishX);
-      this.finishSprite.y = this.ground.y;
+      this.finishSprite.y = this.ground.y + this.FINISH_Y_OFFSET;
     }
 
     /* -------------------- Rivales (IA) -------------------- */
@@ -880,8 +896,11 @@ export class Level1 {
           this.playerX -= 50 * dt * 60;
           e.pos.x += 100 * dt;
           const minKeep = this.baseSpeed * 0.7; if (this.speed < minKeep) this.speed = minKeep;
-          this.hurtPlayer(6);
-          this.opts.audio?.playOne("crash");
+
+          // ✅ solo sonar/dañar una vez gracias a invuln
+          if (this.hurtPlayer(6)) {
+            this.opts.audio?.playOne("crash");
+          }
         }
       }
     }
@@ -894,8 +913,10 @@ export class Level1 {
       const pb = this.player.getBounds(), sb = s.sp.getBounds();
       const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
       if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
-        this.opts.audio?.playOne("impact");
-        this.hurtPlayer(12);
+        // ✅ gateado: sólo si realmente dañó
+        if (this.hurtPlayer(12)) {
+          this.opts.audio?.playOne("impact");
+        }
         s.pos.x = this.camX - 9999;
       }
     }

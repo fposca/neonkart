@@ -1,11 +1,11 @@
 // ===== IMÁGENES =====
 export const IMG = {
   // Nivel
-  fondo: "/assets/img/nivel1-fondo.png",
-  suelo: "/assets/img/nivel1-suelo.png",
-  pared: "/assets/img/nivel1-pared.png",
-  fondo4: "/assets/img/fondo4.png",
-  suelo4: "/assets/img/suelo4.png",
+  fondo: "/assets/img/nivel1-fondo.jpg",
+  suelo: "/assets/img/nivel1-suelo.jpg",
+  pared: "/assets/img/nivel1-pared.jpg",
+  fondo4: "/assets/img/fondo4.jpg",
+  suelo4: "/assets/img/suelo4.jpg",
 
 
   // Jugador
@@ -54,25 +54,25 @@ export type SfxOneName =
 // Mapa de sonidos (solo sonidos; nada de imágenes aquí)
 export const SFX: Record<SfxLoopName | SfxOneName, string> = {
   // loop
-  motor: "/assets/sfx/sfx-motor-neonboy.wav",
+  motor: "/assets/sfx/sfx-motor-neonboy.mp3",
 
   // one-shots gameplay
-  enemyShoot: "/assets/sfx/sfx-reguetonero-ataque.wav",
-  playerHit:  "/assets/sfx/sfx-reguetonero-hit.wav",
-  playerShoot:"/assets/sfx/sfx-guitarra-shot.wav",
-  pickup:     "/assets/sfx/sfx-pickup.wav",
-  crash:      "/assets/sfx/sfx-crash.wav",
-  impact:     "/assets/sfx/sfx-impact.wav",
+  enemyShoot: "/assets/sfx/sfx-reguetonero-ataque.mp3",
+  playerHit:  "/assets/sfx/sfx-reguetonero-hit.mp3",
+  playerShoot:"/assets/sfx/sfx-guitarra-shot_1.mp3",
+  pickup:     "/assets/sfx/sfx-pickup.mp3",
+  crash:      "/assets/sfx/sfx-crash.mp3",
+  impact:     "/assets/sfx/sfx-impact.mp3",
 
   // UI / largada
-  countBeep:  "/assets/sfx/ui-count-beep.wav",
-  countGo:    "/assets/sfx/ui-count-go.wav",
+  countBeep:  "/assets/sfx/ui-count-beep.mp3",
+  countGo:    "/assets/sfx/ui-count-go.mp3",
 };
 
 // ===== MÚSICA =====
 export const BGM: Record<"menu" | "nivel1", string> = {
-  menu:   "/assets/music/bgm-menu.wav",
-  nivel1: "/assets/music/bgm-nivel1.wav",
+  menu:   "/assets/music/bgm-menu.ogg",
+  nivel1: "/assets/music/bgm-nivel1.ogg",
 };
 
 

@@ -79,7 +79,7 @@ export class Level2 {
   camX = 0;
   trackLength = 6000;
   lapFinishX = this.trackLength;
-  lapsTotal = 2; // para probar salto a L3 rápido; podés volver a 30
+  lapsTotal = 20; // para probar salto a L3 rápido; podés volver a 30
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -271,8 +271,8 @@ export class Level2 {
   /* =============================== Load =============================== */
   async load() {
     // fondos nuevos (con fallbacks)
-    const fondo2Path = (IMG as any).fondo2 ?? (IMG as any)["menu-fondo2"] ?? "/assets/img/menu-fondo2.png";
-    const suelo2Path = (IMG as any).suelo2 ?? "/assets/img/suelo2.png";
+    const fondo2Path = (IMG as any).fondo2 ?? (IMG as any)["menu-fondo2"] ?? "/assets/img/menu-fondo2.jpg";
+    const suelo2Path = (IMG as any).suelo2 ?? "/assets/img/suelo2.jpg";
 
     this.tex.fondo = (await this.tryLoad(fondo2Path)) ?? (await this.tryLoad(IMG.fondo));
     this.tex.suelo = (await this.tryLoad(suelo2Path)) ?? (await this.tryLoad(IMG.suelo));
@@ -782,13 +782,16 @@ export class Level2 {
       // colisión con jugador (solo vivos)
       const pb = this.player.getBounds();
       const eb = e.sp.getBounds();
-      const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
-      if (overlap && this.jumpOffset < 10) {
-        this.playerX -= 50 * dt * 60;
-        this.hurtPlayer(8);
-        this.opts.audio?.playOne?.("crash");
-      }
-    }
+   const overlap = pb.right > eb.left && pb.left < eb.right && pb.bottom > eb.top && pb.top < eb.bottom;
+if (overlap && this.jumpOffset < 10 && !this.controlsLocked) {
+  this.playerX -= 50 * dt * 60;
+
+  // ⬅️ Sólo sonamos “crash” si REALMENTE hubo daño (no invuln)
+  if (this.hurtPlayer(8)) {
+    this.opts.audio?.playOne?.("crash");
+  }
+}}
+
 
     // proyectiles enemigos
     for (const s of this.shots) {
@@ -797,11 +800,13 @@ export class Level2 {
 
       const pb = this.player.getBounds(), sb = s.sp.getBounds();
       const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
-      if (hit && this.jumpOffset < 10) {
-        this.opts.audio?.playOne?.("impact");
-        this.hurtPlayer(12);
-        s.pos.x = this.camX - 9999;
-      }
+     if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
+  // ⬅️ Sólo sonamos si aplicó daño
+  if (this.hurtPlayer(12)) {
+    this.opts.audio?.playOne?.("impact");
+  }
+  s.pos.x = this.camX - 9999;
+}
     }
     this.shots = this.shots.filter(s => {
       const alive = s.pos.x > this.camX - 300 && s.pos.x < this.camX + this.W + 400 && s.pos.y > 0 && s.pos.y < this.H;
@@ -854,15 +859,18 @@ export class Level2 {
   }
 
   /* ===== daño ===== */
-  private hurtPlayer(dmg: number) {
-    if (this.invuln > 0 || this.ended || this.finished) return; // evita daño post-meta
-    this.hp = Math.max(0, this.hp - dmg);
-    this.invuln = this.invulnTime;
-    this.redrawHP();
-    this.setPlayerTextureHit();
-    this.opts.audio?.playOne?.("playerHit");
-    if (this.hp <= 0) this.endGame();
-  }
+
+private hurtPlayer(dmg: number): boolean {
+  if (this.invuln > 0 || this.ended || this.finished) return false; // ⬅️ no aplicó daño
+  this.hp = Math.max(0, this.hp - dmg);
+  this.invuln = this.invulnTime;
+  this.redrawHP();
+  this.setPlayerTextureHit();
+  this.opts.audio?.playOne?.("playerHit");
+  if (this.hp <= 0) this.endGame();
+  return true; // ⬅️ daño aplicado
+}
+
 
   /* ============================== Destroy ============================== */
   destroy() {
