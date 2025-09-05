@@ -97,7 +97,7 @@ enemyScale  = 0.65; // runners/torretas
   camX = 0;
   trackLength = 6000;
   lapFinishX = this.trackLength;
-  lapsTotal = 12;
+  lapsTotal = 10;
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -917,36 +917,38 @@ if (on) {
   }
 
   /* ===== Overlays ===== */
+  /* =================== Fin / Overlays con auto-hide 3s =================== */
   private showResultOverlay(text: string) {
-  this.overlay.removeChildren();
-
-  const panel = new PIXI.Graphics()
-    .roundRect(0, 0, 520, 200, 18)
-    .fill(0x111111)
-    .stroke({ width: 2, color: 0x00d2ff, alignment: 1 });
-
-  panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
-  this.overlay.addChild(panel);
-
-  const title = new PIXI.Text({
-    text,
-    style: { fill: 0xffffff, fontSize: 64, fontFamily: "Arial", fontWeight: "900", align: "center" },
-  });
-  title.anchor.set(0.5);
-  title.position.set(this.W / 2, this.H / 2 - 16);
-  this.overlay.addChild(title);
-
-  // ⬇️ Línea NUEVA: tiempo formateado
-  const time = new PIXI.Text({
-    text: this.fmt(this.raceTime * 1000),
-    style: { fill: 0x00d2ff, fontSize: 20, fontFamily: "Arial", fontWeight: "700" },
-  });
-  time.anchor.set(0.5);
-  time.position.set(this.W / 2, this.H / 2 + 28);
-  this.overlay.addChild(time);
-
-  this.overlay.visible = true;
-}
+    this.overlay.removeChildren();
+  
+    const panel = new PIXI.Graphics()
+      .roundRect(0, 0, 520, 200, 18)
+      .fill({ color: 0x000000, alpha: 0.5 });
+    panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
+    this.overlay.addChild(panel);
+  
+    const title = new PIXI.Text({
+      text,
+      style: { fill: 0xffffff, fontSize: 64, fontFamily: "Arial", fontWeight: "900", align: "center" },
+    });
+    title.anchor.set(0.5);
+    title.position.set(this.W / 2, this.H / 2 - 16);
+    this.overlay.addChild(title);
+  
+    const time = new PIXI.Text({
+      text: this.fmt(this.raceTime * 1000),
+      style: { fill: 0x00d2ff, fontSize: 20, fontFamily: "Arial", fontWeight: "700" },
+    });
+    time.anchor.set(0.5);
+  
+    // 👇 aire dinámico debajo del título (sirve cuando es “1º”)
+    const EXTRA_GAP = 34; // ajustá a gusto (30–40 va bien)
+    const yDebajoDelTitulo = title.y + (title.height * 0.5) + EXTRA_GAP;
+    time.position.set(this.W / 2, yDebajoDelTitulo);
+  
+    this.overlay.addChild(time);
+    this.overlay.visible = true;
+  }
 
   private levelComplete(place: 1 | 2 | 3) {
     if (this.finished) return;

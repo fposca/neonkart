@@ -111,7 +111,7 @@ enemyScale  = 0.65; // runners/torretas
   camX = 0;
   trackLength = 9000;            // <- vueltas más largas que L1/L2
   lapFinishX = this.trackLength; // worldX de meta de la vuelta actual
-  lapsTotal = 15;                // (puede cambiarse)
+  lapsTotal = 12;                // (puede cambiarse)
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -297,6 +297,7 @@ enemyScale  = 0.65; // runners/torretas
   trailContainer = new PIXI.Container();
   godTrail: { sp: PIXI.Graphics; life: number; max: number }[] = [];
   godTrailTimer = 0;
+  godBurstTimer = 0;
 
   /* ===== Countdown ===== */
   controlsLocked = true;
@@ -717,18 +718,16 @@ this.setTrafficLights(true, false, false);
 
 
 
-  /* =================== Fin / Overlays con auto-hide ====================== */
+  /* =================== Fin / Overlays con auto-hide 3s =================== */
   private showResultOverlay(text: string) {
     this.overlay.removeChildren();
-
+  
     const panel = new PIXI.Graphics()
       .roundRect(0, 0, 520, 200, 18)
-      .fill(0x111111)
-      .stroke({ width: 2, color: 0x00d2ff, alignment: 1 });
-
+      .fill({ color: 0x000000, alpha: 0.5 });
     panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
     this.overlay.addChild(panel);
-
+  
     const title = new PIXI.Text({
       text,
       style: { fill: 0xffffff, fontSize: 64, fontFamily: "Arial", fontWeight: "900", align: "center" },
@@ -736,15 +735,19 @@ this.setTrafficLights(true, false, false);
     title.anchor.set(0.5);
     title.position.set(this.W / 2, this.H / 2 - 16);
     this.overlay.addChild(title);
-
+  
     const time = new PIXI.Text({
       text: this.fmt(this.raceTime * 1000),
       style: { fill: 0x00d2ff, fontSize: 20, fontFamily: "Arial", fontWeight: "700" },
     });
     time.anchor.set(0.5);
-    time.position.set(this.W / 2, this.H / 2 + 28);
+  
+    // 👇 aire dinámico debajo del título (sirve cuando es “1º”)
+    const EXTRA_GAP = 34; // ajustá a gusto (30–40 va bien)
+    const yDebajoDelTitulo = title.y + (title.height * 0.5) + EXTRA_GAP;
+    time.position.set(this.W / 2, yDebajoDelTitulo);
+  
     this.overlay.addChild(time);
-
     this.overlay.visible = true;
   }
 
@@ -791,7 +794,7 @@ private levelComplete(place: 1 | 2 | 3) {
   }
 
   /* ============================== GOD mode =============================== */
-  private setGod(on: boolean) {
+    private setGod(on: boolean) {
     this.godMode = on;
     if (on) {
       this.godTimer = this.godDuration;
@@ -803,13 +806,22 @@ private levelComplete(place: 1 | 2 | 3) {
       this.godHalo.alpha = 0.5;
       this.godHaloPulse = 0;
 
+      // reset de ráfagas automáticas
+      this.godBurstTimer = 0.05;
+
       // cartel
       this.showLapAnnounce("¡MODO DIOS!");
     } else {
       (this.player as any).tint = 0xffffff;
       this.godHalo.visible = false;
+
+      // 🔥 limpiar cualquier trazo que haya quedado
+      for (const t of this.godTrail) { try { t.sp.destroy(); } catch {} }
+      this.godTrail.length = 0;
+      try { this.trailContainer.removeChildren(); } catch {}
     }
   }
+
 
   private drawGodHalo() {
     this.godHalo.clear();
@@ -905,7 +917,7 @@ if (this.controlsLocked && !this.finished && !this.ended) {
     }
 
     // GOD MODE: tiempo + FX
-    if (this.godMode) {
+       if (this.godMode) {
       this.godTimer -= dt;
       if (this.godTimer <= 0) {
         this.setGod(false);
@@ -917,14 +929,38 @@ if (this.controlsLocked && !this.finished && !this.ended) {
         this.godHaloPulse += dt * 3;
         const k = 0.5 + 0.2 * Math.sin(this.godHaloPulse * 4);
         this.godHalo.alpha = k;
+
         // trail
         this.godTrailTimer -= dt;
         if (this.godTrailTimer <= 0) {
           this.emitGodTrail();
           this.godTrailTimer = 0.03; // ~30-35 fps de partículas
         }
+
+        // 👉 ráfaga automática “fueguito” (como en L1/L2)
+        this.godBurstTimer -= dt;
+        if (this.godBurstTimer <= 0) {
+          this.emitGodBurst();                 // dispara una ráfaga
+          this.godBurstTimer = 0.22;           // cadencia
+        }
       }
     }
+
+    // 👉 actualizar y limpiar el trail del modo dios
+    for (const t of this.godTrail) {
+      t.life -= dt;
+      const p = Math.max(0, t.life / t.max);
+      t.sp.alpha = p;
+      t.sp.x -= 160 * dt;                      // arrastra un poquito hacia la izquierda
+      const s = 0.6 + 0.4 * p;                 // se achican al morir
+      t.sp.scale.set(s, s);
+    }
+    this.godTrail = this.godTrail.filter(t => {
+      const alive = t.life > 0;
+      if (!alive) { try { t.sp.destroy(); } catch {} }
+      return alive;
+    });
+
 
     // Fade del anuncio de vuelta
     if (this.lapAnnounceTimer > 0) {
@@ -1332,6 +1368,47 @@ private makeReggaetonDisc(scale = 4): PIXI.Graphics {
   g.circle(0, 0, 4).fill(0xff33aa);
   g.scale.set(scale);  // 👈 duplica / cuadruplica el tamaño
   return g;
+}
+// 🔥 Disparo tipo "fueguito" con glow
+private makeFlameShot(): PIXI.Graphics {
+  const g = new PIXI.Graphics();
+  const glow = new PIXI.Graphics().circle(0, 0, 10)
+    .fill({ color: 0xff7a1a, alpha: 0.22 });
+  g.addChild(glow);
+
+  g.circle(0, 0, 6).fill(0xff9933)
+    .stroke({ width: 2, color: 0xffd24a, alignment: 1, alpha: 0.9 });
+  // cola
+  g.roundRect(-8, -2, 8, 4, 2).fill(0xffc266);
+  return g;
+}
+
+// 💥 Emite una ráfaga en abanico hacia delante
+private emitGodBurst() {
+  const sx = this.player.x + 44;
+  const sy = this.player.y - 18;
+
+  // 5–6 proyectiles con pequeña dispersión vertical
+  const N = 6;
+  for (let i = 0; i < N; i++) {
+    const g = this.makeFlameShot();
+    const vx = 1000 + Math.random() * 260;      // velocidad alta
+    const vy = (Math.random() - 0.5) * 220;     // leve abanico vertical
+
+    const shot: Shot = {
+      sp: g,
+      pos: { x: this.camX + sx, y: sy },
+      vx, vy,
+    };
+
+    g.position.set(sx, sy);
+    g.zIndex = 820; // por arriba de enemigos
+    this.world.addChild(g);
+    this.playerShots.push(shot);
+  }
+
+  // Reutilizamos un SFX existente (evitamos depender de uno nuevo)
+  this.opts.audio?.playOne?.("playerShoot");
 }
 
 

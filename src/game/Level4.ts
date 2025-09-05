@@ -105,7 +105,7 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
   camX = 0;
   trackLength = 10000;           // más largo que L3
   lapFinishX = this.trackLength;
-  lapsTotal = 18;                // más vueltas = más desafío
+  lapsTotal = 15;                // más vueltas = más desafío
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -670,8 +670,7 @@ private enemyShoot(from: Enemy) {
 
     const panel = new PIXI.Graphics()
       .roundRect(0, 0, 520, 200, 18)
-      .fill(0x111111)
-      .stroke({ width: 2, color: 0x00d2ff, alignment: 1 });
+      .fill({ color: 0x000000, alpha: 0.5 });
 
     panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
     this.overlay.addChild(panel);
