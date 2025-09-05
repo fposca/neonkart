@@ -57,6 +57,9 @@ export class Level2 {
     this.godHalo.zIndex = 990;    // debajo del player (1000)
     this.trailContainer.zIndex = 985;
     this.world.addChild(this.trailContainer, this.godHalo);
+    this.godFireContainer.zIndex = 1002;
+this.godFireContainer.visible = false;
+this.world.addChild(this.godFireContainer);
   }
 
   /* ===== Estado de carga ===== */
@@ -73,6 +76,15 @@ export class Level2 {
   readonly W = 1280;
   readonly H = 720;
 
+  readonly SHOT_Z = 950;            // por encima de rivales (700) y enemigos (750)
+readonly DISC_SCALE_TURRET = 4.0; // vinilo grande (antes 2.0)
+readonly DISC_SCALE_KART   = 4.0; // mismo tamaño para kart
+readonly TURRET_CHANCE     = 1.0; // 100% turrets (si querés mezclar, bajá este número)
+/* ===== Escalas (tamaño) ===== */
+playerScale = 0.65; // kart del jugador
+rivalScale  = 0.65; // Fredy/Doctor
+enemyScale  = 0.65; // runners/torretas
+
   /* ===== Fondo scroll ===== */
   bg1 = new PIXI.Sprite();
   bg2 = new PIXI.Sprite();
@@ -85,7 +97,7 @@ export class Level2 {
   camX = 0;
   trackLength = 6000;
   lapFinishX = this.trackLength;
-  lapsTotal = 30;
+  lapsTotal = 12;
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -123,6 +135,17 @@ export class Level2 {
     style: { fill: 0xffcc00, fontSize: 72, fontFamily: "Arial", fontWeight: "900", align: "center" },
   });
   lapAnnounceTimer = 0;
+   // ===== Tiempo de carrera =====
+  raceTime = 0;
+
+  private fmt(ms: number) {
+    const m = Math.floor(ms / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    const mil = Math.floor(ms % 1000);
+    const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+    const pad3 = (n: number) => n.toString().padStart(3, "0");
+    return `${pad2(m)}:${pad2(s)}.${pad3(mil)}`;
+  }
 
   // Mini-mapa
   mapBg = new PIXI.Graphics();
@@ -211,6 +234,40 @@ export class Level2 {
   godPickupsSpawned = 0;
   godPickupsMax = 1;         // se decide en load()
 
+  // ===== Fuego God (partículas) =====
+godFireContainer = new PIXI.Container();
+godFire: { sp: PIXI.Graphics; life: number; max: number }[] = [];
+godFireTimer = 0;
+
+// ===== Labels de posición (1/2/3) =====
+posTextP = new PIXI.Text({
+  text: "1",
+  style: {
+    fill: 0xffffff, fontSize: 96, fontFamily: "Arial", fontWeight: "900",
+    dropShadow: true
+  },
+});
+posTextR1 = new PIXI.Text({
+  text: "2",
+  style: {
+    fill: 0xffffff, fontSize: 96, fontFamily: "Arial", fontWeight: "900",
+    dropShadow: true, 
+  },
+});
+posTextR2 = new PIXI.Text({
+  text: "3",
+  style: {
+    fill: 0xffffff, fontSize: 96, fontFamily: "Arial", fontWeight: "900",
+    dropShadow: true,
+  },
+});
+
+posFlameP = new PIXI.Graphics();
+posFlameR1 = new PIXI.Graphics();
+posFlameR2 = new PIXI.Graphics();
+posFlameTime = 0;
+
+
   // FX: halo + trail
   godHalo = new PIXI.Graphics();
   godHaloPulse = 0;
@@ -246,8 +303,165 @@ export class Level2 {
     const p = Math.max(0, this.hp / this.maxHP);
     this.hpBarFg.clear().roundRect(1, 1, 258 * p, 16, 8).fill(p > 0.4 ? 0x33dd66 : 0xdd3344);
   }
+  // 🎵 Disparo como "nota musical"
+private makeNoteShot(): PIXI.Graphics {
+  const col = 0xff00ff;   // color de la nota
+  const edge = 0xff00ff;  // contorno sutil
+
+  const g = new PIXI.Graphics();
+
+  // Cabeza de la nota
+  g.circle(0, 0, 8).fill(col).stroke({ width: 2, color: edge, alignment: 1 });
+
+  // Plica
+  g.roundRect(6, -26, 4, 26, 2).fill(col);
+
+  // Banderín
+  const flag = new PIXI.Graphics().roundRect(10, -26, 18, 10, 4).fill(col);
+  flag.alpha = 0.95;
+  g.addChild(flag);
+
+  // Ligera inclinación
+  g.rotation = -0.12;
+
+  return g;
+}
+// 🎧 Disparo reggaetonero: vinilo girando (con tamaño)
+private makeReggaetonDisc(size = 2.0): PIXI.Graphics {
+  const g = new PIXI.Graphics();
+
+  // glow suave
+  const glow = new PIXI.Graphics().circle(0, 0, 16).fill({ color: 0xff33aa, alpha: 0.22 });
+  g.addChild(glow);
+
+  // disco base
+  g.circle(0, 0, 12).fill(0x111111).stroke({ width: 2, color: 0xffffff, alignment: 1, alpha: 0.6 });
+
+  // surcos del vinilo
+  g.circle(0, 0, 9).stroke({ width: 1, color: 0xffffff, alpha: 0.25 });
+  g.circle(0, 0, 6).stroke({ width: 1, color: 0xffffff, alpha: 0.2 });
+
+  // etiqueta neón
+  g.circle(0, 0, 4).fill(0xff33aa);
+
+  // ⬅️ doble de grande (podés ajustar el 2.0)
+  g.scale.set(size);
+  return g;
+}
+
   private updateLapHud() { this.lapText.text = `VUELTA ${this.lap}/${this.lapsTotal}`; }
   private updateAmmoHud() { this.ammoText.text = this.hasDistortion ? `Ammo: ${this.ammo}` : ""; }
+
+  private colorForPlace(place: number): number {
+  if (place === 1) return 0xffd24a; // dorado
+  if (place === 2) return 0xc0c0c0; // plateado
+  return 0x7a7a7a;                  // gris
+}
+
+/* ===== Labels de posición ===== */
+private setupPositionLabels() {
+  this.posTextP.anchor.set(0.5, 1);
+  this.posTextR1.anchor.set(0.5, 1);
+  this.posTextR2.anchor.set(0.5, 1);
+
+  (this.posTextP as any).zIndex = 2000;
+  (this.posTextR1 as any).zIndex = 2000;
+  (this.posTextR2 as any).zIndex = 2000;
+
+  (this.posFlameP as any).zIndex = 1995;
+  (this.posFlameR1 as any).zIndex = 1995;
+  (this.posFlameR2 as any).zIndex = 1995;
+
+  // primero flamas (debajo), luego textos (encima)
+  // this.world.addChild(this.posFlameP, this.posFlameR1, this.posFlameR2);
+  this.world.addChild(this.posTextP, this.posTextR1, this.posTextR2);
+}
+
+private drawLabelFlame(g: PIXI.Graphics, size: number, t: number) {
+  g.clear();
+  const h = size * (1.2 + Math.sin(t * 8) * 0.12);
+  const w = size * 0.9;
+  g.ellipse(0, 0, w, h * 0.45).fill(0xff6a00);
+  g.ellipse(0, -h * 0.22, w * 0.65, h * 0.35).fill(0xffd200);
+  g.ellipse(0, -h * 0.45, w * 0.30, h * 0.22).fill(0xffffff);
+  g.alpha = 0.75;
+}
+
+private updatePositionFlames(dt: number) {
+  this.posFlameTime += dt;
+  const sz = 22, offY = 22;
+
+  this.drawLabelFlame(this.posFlameP,  sz, this.posFlameTime);
+  this.drawLabelFlame(this.posFlameR1, sz, this.posFlameTime + 0.3);
+  this.drawLabelFlame(this.posFlameR2, sz, this.posFlameTime + 0.6);
+
+  // seguir a los textos
+  this.posFlameP.position.set(this.posTextP.x,   this.posTextP.y + offY);
+  this.posFlameR1.position.set(this.posTextR1.x, this.posTextR1.y + offY);
+  this.posFlameR2.position.set(this.posTextR2.x, this.posTextR2.y + offY);
+}
+
+private updateRacePositions() {
+  const playerWX = this.camX + this.player.x;
+  const r1WX = this.rivals[0]?.pos.x ?? -Infinity;
+  const r2WX = this.rivals[1]?.pos.x ?? -Infinity;
+
+  const rows = [
+    { sp: this.player,        wx: playerWX, label: this.posTextP },
+    { sp: this.rivals[0]?.sp, wx: r1WX,     label: this.posTextR1 },
+    { sp: this.rivals[1]?.sp, wx: r2WX,     label: this.posTextR2 },
+  ].filter(r => r.sp);
+
+  rows.sort((a, b) => b.wx - a.wx); // más adelante = 1º
+
+  const OFFSET_UP = -38;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const sp = r.sp as PIXI.Sprite;
+    const yTop = sp.y - sp.height * ((sp as any).anchor?.y ?? 0.5);
+
+    r.label.text = String(i + 1);
+    (r.label.style as any).fill = this.colorForPlace(i + 1);
+    r.label.x = sp.x;
+    r.label.y = yTop - OFFSET_UP;
+  }
+}
+
+/* ===== Fuego del Modo Dios ===== */
+private emitGodFire() {
+  const count = (2 + (Math.random() * 2)) | 0;
+  for (let i = 0; i < count; i++) {
+    const g = new PIXI.Graphics();
+    const col = Math.random() < 0.5 ? 0xff6a00 : 0xffd200;
+    const rw = 8 + Math.random() * 6;
+    const rh = 12 + Math.random() * 8;
+    g.ellipse(0, 0, rw, rh).fill(col);
+    g.alpha = 0.9;
+    const px = this.player.x - 28 + (Math.random() * 12 - 6);
+    const py = this.player.y - this.jumpOffset + 4 + (Math.random() * 10 - 5);
+    g.position.set(px, py);
+    this.godFireContainer.addChild(g);
+    const life = 0.35 + Math.random() * 0.25;
+    this.godFire.push({ sp: g, life, max: life });
+  }
+}
+
+private updateGodFire(dt: number) {
+  if (!this.godFire.length) return;
+  for (const p of this.godFire) {
+    p.sp.y -= 50 * dt;
+    p.sp.x -= 120 * dt;
+    p.life -= dt;
+    const a = Math.max(0, p.life / p.max);
+    p.sp.alpha = a;
+    p.sp.scale.set(1 + (1 - a) * 0.4);
+  }
+  this.godFire = this.godFire.filter(p => {
+    if (p.life > 0) return true;
+    try { p.sp.destroy(); } catch {}
+    return false;
+  });
+}
 
   // anuncios de vuelta
   private shouldAnnounceLap(lap: number) {
@@ -358,6 +572,7 @@ export class Level2 {
     this.player.anchor.set(0.5, 0.8);
     this.player.position.set(this.playerX, this.playerY);
     this.player.zIndex = 1000;
+    this.player.scale.set(this.playerScale); // 👈 NUEVO
     this.world.addChild(this.player);
 
     /* HUD */
@@ -407,13 +622,14 @@ export class Level2 {
 
     /* Rivales al lado tuyo */
     this.spawnRivalsAtStart();
+    this.setupPositionLabels();
 
     /* Enemigos */
     this.nextEnemyIn();
 
     /* Overlay oculto (lo usamos para countdown / resultados) */
     this.overlay.visible = false;
-
+this.raceTime = 0;
     /* COUNTDOWN */
     this.setupCountdown();
 
@@ -448,7 +664,7 @@ export class Level2 {
     const panel = new PIXI.Graphics()
       .roundRect(0, 0, panelW, panelH, 24)
       .fill({ color: 0x000000, alpha: 0.4 })
-      .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
+      // .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
     const cx = (this.W - panelW) / 2;
     const cy = (this.H - panelH) / 2 - 30;
     panel.position.set(cx, cy);
@@ -459,6 +675,11 @@ export class Level2 {
 
     this.overlay.addChild(panel, this.countdownText, this.traffic);
     this.overlay.visible = true;
+    (this.countdownText.style as any).fill = 0xffffff;
+this.countdownText.alpha = 1;
+
+// estado inicial: solo ROJO encendido
+this.setTrafficLights(true, false, false);
   }
   private setTrafficLights(red: boolean, yellow: boolean, green: boolean) {
     (this.lampRed as any).tint = red ? 0xff0000 : 0x550000;
@@ -472,6 +693,7 @@ export class Level2 {
       const sp = new PIXI.Sprite(t ?? this.tex.enemy ?? PIXI.Texture.WHITE);
       sp.anchor.set(0.5, 0.8);
       sp.zIndex = 700;
+        sp.scale.set(this.rivalScale); // 👈 NUEVO
       this.world.addChild(sp);
       return sp;
     };
@@ -487,15 +709,16 @@ export class Level2 {
   /* ===== Spawns ===== */
   private spawnEnemy() {
     // 60% torreta, 40% kart
-    const isTurret = Math.random() < 0.6;
+    const isTurret = Math.random() < this.TURRET_CHANCE;
 
-    const margin = 260;
+    const margin = 240;
     const x = this.camX + this.W + margin;
-    const yBase = this.playerY - 24;
+    const yBase = this.playerY;
 
     const sp = new PIXI.Sprite(this.tex.enemy ?? PIXI.Texture.WHITE);
     sp.anchor.set(0.5, 0.8);
     sp.zIndex = 750;
+    sp.scale.set(this.enemyScale); // 👈
     if (!this.tex.enemy) {
       const g = new PIXI.Graphics().rect(-24, -16, 48, 32).fill(isTurret ? 0xc0392b : 0x27ae60);
       sp.texture = this.app.renderer.generateTexture(g);
@@ -514,29 +737,46 @@ export class Level2 {
     this.enemies.push(e);
   }
 
-  private enemyShoot(from: Enemy) {
-    if (from.dead) return;
-    const sx = this.screenX(from.pos.x), sy = from.pos.y - 24;
-    const dx = this.player.x, dy = this.player.y - 10;
-    const ang = Math.atan2(dy - sy, dx - sx);
-    const v = 430;
+ private enemyShoot(from: Enemy) {
+  if (from.dead) return;
 
-    const shot: Shot = {
-      sp: new PIXI.Graphics().circle(0, 0, 6).fill(0xff5533),
-      pos: { x: from.pos.x, y: sy },
-      vx: Math.cos(ang) * v, vy: Math.sin(ang) * v,
-    };
-    shot.sp.position.set(this.screenX(shot.pos.x), shot.pos.y);
-    shot.sp.zIndex = 650;
-    this.world.addChild(shot.sp);
-    this.shots.push(shot);
+  // Ángulo en coordenadas de mundo
+  const sx = from.pos.x,          sy = from.pos.y - 24;
+  const dx = this.camX + this.player.x, dy = this.player.y - 10;
+  const ang = Math.atan2(dy - sy, dx - sx);
+  const v = 430;
 
-    this.opts.audio?.playOne?.("enemyShoot");
-    if (!from.dead && this.tex.enemyAtk) {
-      from.sp.texture = this.tex.enemyAtk;
-      setTimeout(() => { if (!from.dead && this.tex.enemy) from.sp.texture = this.tex.enemy; }, 180);
-    }
+  // Vinilo para TODOS (turret y kart), con tamaño por tipo
+  const size = from.kind === "turret" ? this.DISC_SCALE_TURRET : this.DISC_SCALE_KART;
+  const gfx = this.makeReggaetonDisc(size);
+
+  const shot: Shot = {
+    sp: gfx,
+    pos: { x: from.pos.x, y: sy },   // mundo
+    vx: Math.cos(ang) * v,
+    vy: Math.sin(ang) * v,
+  };
+
+  // Giro del vinilo
+  (shot.sp as any).rotSpeed = Math.random() < 0.5 ? -8 : 8;
+
+  // Posición inicial (mundo → pantalla en X)
+  shot.sp.position.set(this.screenX(shot.pos.x), shot.pos.y);
+  shot.sp.zIndex = this.SHOT_Z;
+
+  this.world.addChild(shot.sp);
+  this.shots.push(shot);
+
+  this.opts.audio?.playOne?.("enemyShoot");
+
+  // Animación de disparo en el sprite enemigo
+  if (!from.dead && this.tex.enemyAtk) {
+    from.sp.texture = this.tex.enemyAtk;
+    setTimeout(() => { if (!from.dead && this.tex.enemy) from.sp.texture = this.tex.enemy; }, 180);
   }
+}
+
+
 
   /* ===== Pickups ===== */
   private spawnPickup() {
@@ -604,6 +844,20 @@ export class Level2 {
   /* ===== GOD mode ===== */
   private setGod(on: boolean) {
     this.godMode = on;
+    this.godMode = on;
+
+// toggle del fuego
+if (on) {
+  this.godFireContainer.visible = true;
+  this.godFireTimer = 0;
+} else {
+  this.godFireContainer.visible = false;
+  for (const f of this.godFire) { try { f.sp.destroy(); } catch {} }
+  this.godFire = [];
+}
+
+// (tu código existente de halo, tint, anuncio, etc. queda como está)
+
     if (on) {
       this.godTimer = this.godDuration;
       (this.player as any).tint = 0xffee66;
@@ -664,26 +918,35 @@ export class Level2 {
 
   /* ===== Overlays ===== */
   private showResultOverlay(text: string) {
-    this.overlay.removeChildren();
+  this.overlay.removeChildren();
 
-    const panel = new PIXI.Graphics()
-      .roundRect(0, 0, 520, 200, 18)
-      .fill(0x111111)
-      .stroke({ width: 2, color: 0x00d2ff, alignment: 1 });
+  const panel = new PIXI.Graphics()
+    .roundRect(0, 0, 520, 200, 18)
+    .fill(0x111111)
+    .stroke({ width: 2, color: 0x00d2ff, alignment: 1 });
 
-    panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
-    this.overlay.addChild(panel);
+  panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
+  this.overlay.addChild(panel);
 
-    const title = new PIXI.Text({
-      text,
-      style: { fill: 0xffffff, fontSize: 64, fontFamily: "Arial", fontWeight: "900", align: "center" },
-    });
-    title.anchor.set(0.5);
-    title.position.set(this.W / 2, this.H / 2);
-    this.overlay.addChild(title);
+  const title = new PIXI.Text({
+    text,
+    style: { fill: 0xffffff, fontSize: 64, fontFamily: "Arial", fontWeight: "900", align: "center" },
+  });
+  title.anchor.set(0.5);
+  title.position.set(this.W / 2, this.H / 2 - 16);
+  this.overlay.addChild(title);
 
-    this.overlay.visible = true;
-  }
+  // ⬇️ Línea NUEVA: tiempo formateado
+  const time = new PIXI.Text({
+    text: this.fmt(this.raceTime * 1000),
+    style: { fill: 0x00d2ff, fontSize: 20, fontFamily: "Arial", fontWeight: "700" },
+  });
+  time.anchor.set(0.5);
+  time.position.set(this.W / 2, this.H / 2 + 28);
+  this.overlay.addChild(time);
+
+  this.overlay.visible = true;
+}
 
   private levelComplete(place: 1 | 2 | 3) {
     if (this.finished) return;
@@ -692,6 +955,7 @@ export class Level2 {
     // FREEZE COMBATE al terminar
     for (const e of this.enemies) e.shootCd = 9999;
     for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
+
     this.shots = [];
     this.invuln = 9999;
 
@@ -723,35 +987,54 @@ export class Level2 {
     if (this.finished) return; // congela todo tras cruzar la meta
 
     /* ===== COUNTDOWN ===== */
-    if (this.controlsLocked) {
-      this.countdownTimer -= dt;
-      if (this.countdownTimer <= 0) {
-        if (this.countdown === 3) {
-          this.countdown = 2; this.countdownText.text = "2"; this.countdownTimer = 1.0;
-          this.setTrafficLights(true, true, false);
-          this.opts.audio?.playOne?.("countBeep");
-        } else if (this.countdown === 2) {
-          this.countdown = 1; this.countdownText.text = "1"; this.countdownTimer = 1.0;
-          this.setTrafficLights(true, true, false);
-          this.opts.audio?.playOne?.("countBeep");
-        } else if (this.countdown === 1) {
-          this.countdown = 0;
-          this.countdownText.text = "GO!";
-          (this.countdownText.style as any).fill = 0x00ff66;
-          this.goFlashTimer = 0.6;
-          this.countdownTimer = 0.4;
-          this.setTrafficLights(false, false, true);
-          this.opts.audio?.playOne?.("countGo");
-        } else {
-          this.overlay.removeChildren();
-          this.overlay.visible = false;
-          this.controlsLocked = false;
-        }
-      }
-      if (this.goFlashTimer > 0) {
-        this.goFlashTimer -= dt;
-        (this.countdownText as any).alpha = 0.55 + 0.45 * Math.sin(this.goFlashTimer * 20);
-      }
+   // COUNTDOWN
+if (this.controlsLocked && !this.finished && !this.ended) {
+  this.countdownTimer -= dt;
+  if (this.countdownTimer <= 0) {
+    if (this.countdown === 3) {
+      // 3 -> 2: encendé AMARILLO (ROJO ya venía de setup)
+      this.countdown = 2;
+      this.countdownText.text = "2";
+      this.countdownTimer = 1.0;
+      this.setTrafficLights(true, true, false);   // rojo + amarillo
+      this.opts.audio?.playOne?.("countBeep");
+    } else if (this.countdown === 2) {
+      // 2 -> 1: encendé VERDE (quedan las 3 encendidas)
+      this.countdown = 1;
+      this.countdownText.text = "1";
+      this.countdownTimer = 1.0;
+      this.setTrafficLights(true, true, true);    // rojo + amarillo + verde
+      this.opts.audio?.playOne?.("countBeep");
+    } else if (this.countdown === 1) {
+      // GO!
+      this.countdown = 0;
+      this.countdownText.text = "GO!";
+      (this.countdownText.style as any).fill = 0x00ff66;
+      this.goFlashTimer = 0.6;
+      this.countdownTimer = 0.4;
+
+      // mantener las 3 encendidas en GO (acumulativo)
+      this.setTrafficLights(true, true, true);
+      // si preferís solo verde en GO, usá:
+      // this.setTrafficLights(false, false, true);
+
+      this.opts.audio?.playOne?.("countGo");
+    } else {
+      // arranca la carrera
+      this.overlay.removeChildren();
+      this.overlay.visible = false;
+      this.controlsLocked = false;
+    }
+  }
+
+  // parpadeo del "GO!"
+  if (this.goFlashTimer > 0) {
+    this.goFlashTimer -= dt;
+    (this.countdownText as any).alpha = 0.55 + 0.45 * Math.sin(this.goFlashTimer * 20);
+  }
+if (!this.controlsLocked && !this.finished) {
+  this.raceTime += dt;
+}
     }
 
     // timers jugador
@@ -762,6 +1045,10 @@ export class Level2 {
 
     // GOD MODE: tiempo + FX
     if (this.godMode) {
+      // fuego God (además del halo/trail que ya tenías)
+this.godFireTimer -= dt;
+if (this.godFireTimer <= 0) { this.emitGodFire(); this.godFireTimer = 0.04; }
+this.updateGodFire(dt);
       this.godTimer -= dt;
       if (this.godTimer <= 0) {
         this.setGod(false);
@@ -810,7 +1097,7 @@ export class Level2 {
       const sx = this.player.x + 40;
       const sy = this.player.y - 24;
       const speed = 900;
-      const gfx = new PIXI.Graphics().roundRect(-20, -5, 40, 10, 4).fill(0x00d2ff);
+      const gfx = this.makeNoteShot(); // 🎵
       const shot: Shot = { sp: gfx, pos: { x: this.camX + sx, y: sy }, vx: speed, vy: 0 };
       shot.sp.position.set(sx, sy);
       shot.sp.zIndex = 800;
@@ -956,6 +1243,10 @@ export class Level2 {
       s.pos.x += s.vx * dt; s.pos.y += s.vy * dt;
       s.sp.x = this.screenX(s.pos.x); s.sp.y = s.pos.y;
 
+       // rotación del vinilo (si existe rotSpeed)
+  const rs = (s.sp as any).rotSpeed ?? 0;
+  if (rs) s.sp.rotation += rs * dt;
+
       const pb = this.player.getBounds(), sb = s.sp.getBounds();
       const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
       if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
@@ -973,7 +1264,7 @@ export class Level2 {
     for (const s of this.playerShots) {
       s.pos.x += s.vx * dt; s.pos.y += s.vy * dt;
       s.sp.x = this.screenX(s.pos.x); s.sp.y = s.pos.y;
-
+s.sp.rotation = Math.sin(s.pos.x * 0.02) * 0.25;
       for (const e of this.enemies) {
         if (e.dead) continue;
         const eb = e.sp.getBounds(), sb = s.sp.getBounds();
@@ -1029,6 +1320,8 @@ export class Level2 {
 
     // minimapa
     this.updateMiniMap();
+    this.updateRacePositions();
+this.updatePositionFlames(dt);
   }
 
   /* ===== daño ===== */
@@ -1049,6 +1342,12 @@ export class Level2 {
     try { this.world.removeChildren(); } catch {}
     try { this.bgLayer.removeChildren(); } catch {}
     try { this.hud.removeChildren(); } catch {}
+    try { this.posTextP.destroy(); } catch {}
+try { this.posTextR1.destroy(); } catch {}
+try { this.posTextR2.destroy(); } catch {}
+
+for (const f of this.godFire) { try { f.sp.destroy(); } catch {} }
+try { this.godFireContainer.destroy({ children: true }); } catch {}
     for (const e of this.enemies) { try { e.sp.destroy(); } catch {} }
     for (const r of this.rivals)  { try { r.sp.destroy(); } catch {} }
     for (const s of this.shots)   { try { s.sp.destroy(); } catch {} }

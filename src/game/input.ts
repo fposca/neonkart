@@ -5,13 +5,13 @@ export type Actions = {
   down: boolean;
   fire: boolean;   // salto (Space)
   fire2: boolean;  // disparo (Ctrl / F)
+  pause: boolean;  // ⬅ NUEVO (P o Escape)
 };
 
 export class Input {
-  a: Actions = { left:false, right:false, up:false, down:false, fire:false, fire2:false };
+  a: Actions = { left:false, right:false, up:false, down:false, fire:false, fire2:false, pause:false };
 
   constructor(_root: HTMLElement) {
-    // ===== Teclado =====
     const prevent = new Set(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Space"]);
     window.addEventListener("keydown", (e) => {
       if (prevent.has(e.code)) e.preventDefault();
@@ -22,18 +22,18 @@ export class Input {
       if (prevent.has(e.code)) e.preventDefault();
       this.setKey(e.code, false);
     }, { passive: false });
-
-    // ❌ Sin UI táctil interna ni fallback táctil crudo.
-    // El control táctil lo hace la botonera del App, que emite KeyboardEvent.
   }
 
   private setKey(code: string, on: boolean) {
     if (code === "ArrowLeft"  || code === "KeyA") this.a.left  = on;
-    if (code === "ArrowRight" || code === "KeyD") this.a.right = on; // acelera/strafe
+    if (code === "ArrowRight" || code === "KeyD") this.a.right = on;
     if (code === "ArrowUp"    || code === "KeyW") this.a.up    = on;
     if (code === "ArrowDown"  || code === "KeyS") this.a.down  = on;
-    if (code === "Space") this.a.fire = on;  // salto
-    if (code === "KeyF")  this.a.fire2 = on; // disparo alternativo
-    if (code === "ControlLeft" || code === "ControlRight") this.a.fire2 = on; // Ctrl = disparo
+    if (code === "Space") this.a.fire = on;
+    if (code === "KeyF")  this.a.fire2 = on;
+    if (code === "ControlLeft" || code === "ControlRight") this.a.fire2 = on;
+
+    // ⬅ Pausa (P o Escape)
+    if (code === "KeyP" || code === "Escape") this.a.pause = on;
   }
 }

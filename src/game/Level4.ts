@@ -15,6 +15,7 @@ type Runner = {
   hp: number;
   dead: boolean;
   shootFlash: number;
+  shootCd: number;   // 👈 nuevo
 };
 
 type Turret = {
@@ -88,6 +89,9 @@ export class Level4 {
   world = new PIXI.Container();
   hud = new PIXI.Container();
   overlay = new PIXI.Container(); // countdown / resultados
+  readonly SHOT_Z = 950;             // sobre rivales (700) y enemigos (750), bajo player (1000)
+readonly DISC_SCALE_TURRET = 4.0;  // tamaño vinilo torreta
+readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
 
   /* ===== Fondo scroll ===== */
   bg1 = new PIXI.Sprite();
@@ -101,7 +105,7 @@ export class Level4 {
   camX = 0;
   trackLength = 10000;           // más largo que L3
   lapFinishX = this.trackLength;
-  lapsTotal = 36;                // más vueltas = más desafío
+  lapsTotal = 18;                // más vueltas = más desafío
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -155,6 +159,41 @@ export class Level4 {
   levelTag = new PIXI.Text({
     text: "L4",
     style: { fill: 0xccccff, fontSize: 12, fontFamily: "Arial", fontWeight: "700" },
+  });
+
+    // ===== Labels grandes de posición (sin flama)
+  posTextP = new PIXI.Text({
+    text: "1",
+    style: {
+      fill: 0xffffff,
+      fontSize: 96,
+      fontFamily: "Arial",
+      fontWeight: "900",
+      dropShadow: true,
+      
+    },
+  });
+  posTextR1 = new PIXI.Text({
+    text: "2",
+    style: {
+      fill: 0xffffff,
+      fontSize: 96,
+      fontFamily: "Arial",
+      fontWeight: "900",
+      dropShadow: true,
+      
+    },
+  });
+  posTextR2 = new PIXI.Text({
+    text: "3",
+    style: {
+      fill: 0xffffff,
+      fontSize: 96,
+      fontFamily: "Arial",
+      fontWeight: "900",
+      dropShadow: true,
+     
+    },
   });
 
   /* ===== Jugador ===== */
@@ -237,6 +276,11 @@ export class Level4 {
   godPickupMax = 20;
   godPickupsSpawned = 0;
   godPickupsMax = 2;         // 2 garantizados; chance de 3 en load()
+
+  /* ===== Escalas (tamaño) ===== */
+playerScale = 0.65; // kart del jugador
+rivalScale  = 0.65; // Fredy/Doctor
+enemyScale  = 0.65; // runners/torretas
 
   // FX
   godHalo = new PIXI.Graphics();
@@ -396,6 +440,7 @@ export class Level4 {
     this.player.anchor.set(0.5, 0.8);
     this.player.position.set(this.playerX, this.playerY);
     this.player.zIndex = 1000;
+    this.player.scale.set(this.playerScale); // 👈 NUEVO
     this.world.addChild(this.player);
 
     // HUD
@@ -444,7 +489,7 @@ export class Level4 {
 
     // Rivales
     this.spawnRivalsAtStart();
-
+this.setupPositionLabels();
     // Enemigos
     this.nextEnemyIn();
 
@@ -499,7 +544,7 @@ export class Level4 {
     const panel = new PIXI.Graphics()
       .roundRect(0, 0, panelW, panelH, 24)
       .fill({ color: 0x000000, alpha: 0.4 })
-      .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
+      // .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
 
     const cx = (this.W - panelW) / 2;
     const cy = (this.H - panelH) / 2 - 30;
@@ -526,6 +571,7 @@ export class Level4 {
       const sp = new PIXI.Sprite(t ?? this.tex.enemy ?? PIXI.Texture.WHITE);
       sp.anchor.set(0.5, 0.8);
       sp.zIndex = 700;
+       sp.scale.set(this.rivalScale); // 👈 NUEVO
       this.world.addChild(sp);
       return sp;
     };
@@ -544,6 +590,7 @@ export class Level4 {
     const sp = new PIXI.Sprite(this.tex.enemy ?? PIXI.Texture.WHITE);
     sp.anchor.set(0.5, 0.8);
     sp.zIndex = 760; // por encima de torretas/rivales
+    sp.scale.set(this.enemyScale); // 👈
     if (!this.tex.enemy) {
       const g = new PIXI.Graphics().rect(-24,-16,48,32).fill(0x27ae60);
       sp.texture = this.app.renderer.generateTexture(g);
@@ -551,7 +598,7 @@ export class Level4 {
     this.world.addChild(sp);
 
     const rel = (Math.random() < 0.5 ? -1 : 1) * (60 + Math.random() * 100);
-    const e: Runner = { kind: "runner", sp, pos: { x, y }, speed: this.baseSpeed + rel, hp: 3, dead: false, shootFlash: 0 };
+    const e: Runner = { kind: "runner", sp, pos: { x, y }, speed: this.baseSpeed + rel, hp: 3, dead: false, shootFlash: 0,  shootCd: 0.5 + Math.random() * 0.9, };
     this.enemies.push(e);
   }
 
@@ -563,6 +610,7 @@ export class Level4 {
     const sp = new PIXI.Sprite(this.tex.enemy ?? PIXI.Texture.WHITE);
     sp.anchor.set(0.5, 0.8);
     sp.zIndex = 640;
+    sp.scale.set(this.enemyScale); // 👈 agrega esto
     if (!this.tex.enemy) {
       const g = new PIXI.Graphics().rect(-24,-16,48,32).fill(0xc0392b);
       sp.texture = this.app.renderer.generateTexture(g);
@@ -577,37 +625,44 @@ export class Level4 {
     // 70% runner / 30% torreta en L4
     if (Math.random() < 0.70) this.spawnRunner(); else this.spawnTurret();
   }
+private enemyShoot(from: Enemy) {
+  if (from.dead) return;
 
-  private enemyShoot(from: Enemy) {
-    if (from.dead) return;
+  // Cálculo en mundo (no uses screenX para el ángulo)
+  const sxW = from.pos.x,      sy = from.pos.y - 24;
+  const dxW = this.camX + this.player.x, dy = this.player.y - 10;
+  const ang = Math.atan2(dy - sy, dxW - sxW);
+  const v = 430;
 
-    const sx = this.screenX(from.pos.x);
-    const sy = from.pos.y - 24;
-    const dx = this.player.x, dy = this.player.y - 10;
-    const ang = Math.atan2(dy - sy, dx - sx);
-    const v = 480; // balas más rápidas
+  const scale = from.kind === "turret" ? this.DISC_SCALE_TURRET : this.DISC_SCALE_RUNNER;
+  const gfx = this.makeReggaetonDisc(scale); // vinilo grande para ambos
 
-    const color = from.kind === "turret" ? 0xff5533 : 0x00ccff;
-    const shot: Shot = {
-      sp: new PIXI.Graphics().circle(0, 0, 6).fill(color),
-      pos: { x: from.pos.x, y: sy },
-      vx: Math.cos(ang) * v, vy: Math.sin(ang) * v,
-    };
-    shot.sp.position.set(this.screenX(shot.pos.x), shot.pos.y);
-    shot.sp.zIndex = 650;
-    this.world.addChild(shot.sp);
-    this.shots.push(shot);
+  const shot: Shot = {
+    sp: gfx,
+    pos: { x: sxW, y: sy },     // en mundo
+    vx: Math.cos(ang) * v,
+    vy: Math.sin(ang) * v,
+  };
 
-    this.opts.audio?.playOne?.("enemyShoot");
+  // giro del vinilo
+  (shot.sp as any).rotSpeed = Math.random() < 0.5 ? -8 : 8;
 
-    if (from.kind === "runner") {
-      if (this.tex.enemyAtk) from.sp.texture = this.tex.enemyAtk;
-      (from as Runner).shootFlash = 0.18;
-    } else {
-      if (this.tex.enemyAtk) from.sp.texture = this.tex.enemyAtk;
-      setTimeout(() => { if (!from.dead && this.tex.enemy) from.sp.texture = this.tex.enemy; }, 180);
-    }
+  // posicionar (X en pantalla, Y ya es pantalla)
+  shot.sp.position.set(this.screenX(shot.pos.x), shot.pos.y);
+  shot.sp.zIndex = this.SHOT_Z;
+
+  this.world.addChild(shot.sp);
+  this.shots.push(shot);
+
+  this.opts.audio?.playOne?.("enemyShoot");
+
+  // flash de disparo
+  if (!from.dead && this.tex.enemyAtk) {
+    from.sp.texture = this.tex.enemyAtk;
+    setTimeout(() => { if (!from.dead && this.tex.enemy) from.sp.texture = this.tex.enemy; }, 180);
   }
+}
+
 
   /* =================== Fin / Overlays con auto-hide ====================== */
   private showResultOverlay(text: string) {
@@ -638,6 +693,14 @@ export class Level4 {
     this.overlay.addChild(time);
 
     this.overlay.visible = true;
+    // reset visual del texto
+(this.countdownText.style as any).fill = 0xffffff;
+this.countdownText.alpha = 1;
+
+// estado inicial: solo ROJO encendido
+this.setTrafficLights(true, false, false);
+// opcional beep inicial:
+// this.opts.audio?.playOne?.("countBeep");
   }
 
   private levelComplete(place: 1 | 2 | 3) {
@@ -714,38 +777,54 @@ export class Level4 {
   update(dt: number) {
     if (!this.ready) return;
     if (this.ended) return;
+    if (this.finished) return; // congela todo tras cruzar la meta ✅
 
-    // COUNTDOWN
-    if (this.controlsLocked) {
-      this.countdownTimer -= dt;
-      if (this.countdownTimer <= 0) {
-        if (this.countdown === 3) {
-          this.countdown = 2; this.countdownText.text = "2"; this.countdownTimer = 1.0;
-          this.setTrafficLights(true, true, false);
-          this.opts.audio?.playOne?.("countBeep");
-        } else if (this.countdown === 2) {
-          this.countdown = 1; this.countdownText.text = "1"; this.countdownTimer = 1.0;
-          this.setTrafficLights(true, true, false);
-          this.opts.audio?.playOne?.("countBeep");
-        } else if (this.countdown === 1) {
-          this.countdown = 0;
-          this.countdownText.text = "GO!";
-          (this.countdownText.style as any).fill = 0x00ff66;
-          this.goFlashTimer = 0.6;
-          this.countdownTimer = 0.4;
-          this.setTrafficLights(false, false, true);
-          this.opts.audio?.playOne?.("countGo");
-        } else {
-          this.overlay.removeChildren();
-          this.overlay.visible = false;
-          this.controlsLocked = false;
-        }
-      }
-      if (this.goFlashTimer > 0) {
-        this.goFlashTimer -= dt;
-        (this.countdownText as any).alpha = 0.55 + 0.45 * Math.sin(this.goFlashTimer * 20);
-      }
+   // COUNTDOWN (luces acumulativas)
+if (this.controlsLocked && !this.finished && !this.ended) {
+  this.countdownTimer -= dt;
+  if (this.countdownTimer <= 0) {
+    if (this.countdown === 3) {
+      // 3 -> 2: ROJO + AMARILLO
+      this.countdown = 2;
+      this.countdownText.text = "2";
+      this.countdownTimer = 1.0;
+      this.setTrafficLights(true, true, false);
+      this.opts.audio?.playOne?.("countBeep");
+    } else if (this.countdown === 2) {
+      // 2 -> 1: ROJO + AMARILLO + VERDE
+      this.countdown = 1;
+      this.countdownText.text = "1";
+      this.countdownTimer = 1.0;
+      this.setTrafficLights(true, true, true);
+      this.opts.audio?.playOne?.("countBeep");
+    } else if (this.countdown === 1) {
+      // GO!
+      this.countdown = 0;
+      this.countdownText.text = "GO!";
+      (this.countdownText.style as any).fill = 0x00ff66;
+      this.goFlashTimer = 0.6;
+      this.countdownTimer = 0.4;
+
+      // mantener las 3 encendidas durante el GO (opcional: solo verde)
+      this.setTrafficLights(true, true, true);
+      // this.setTrafficLights(false, false, true);
+
+      this.opts.audio?.playOne?.("countGo");
+    } else {
+      // arranca la carrera
+      this.overlay.removeChildren();
+      this.overlay.visible = false;
+      this.controlsLocked = false;
     }
+  }
+
+  // parpadeo del "GO!"
+  if (this.goFlashTimer > 0) {
+    this.goFlashTimer -= dt;
+    (this.countdownText as any).alpha = 0.55 + 0.45 * Math.sin(this.goFlashTimer * 20);
+  }
+}
+
 
     // tiempo visual
     if (!this.finished && !this.controlsLocked) {
@@ -814,7 +893,7 @@ export class Level4 {
       const sx = this.player.x + 40;
       const sy = this.player.y - 24;
       const speed = 920;
-      const gfx = new PIXI.Graphics().roundRect(-20, -5, 40, 10, 4).fill(0x00d2ff);
+      const gfx = this.makeNoteShot(); // 🎵
 
       const shot: Shot = { sp: gfx, pos: { x: this.camX + sx, y: sy }, vx: speed, vy: 0 };
       shot.sp.position.set(sx, sy);
@@ -857,6 +936,17 @@ export class Level4 {
         const rivalsAhead = this.rivals.filter(r => r.pos.x >= this.lapFinishX).length;
         const place = (1 + rivalsAhead) as 1 | 2 | 3;
         this.levelComplete(place);
+        this.enemyTimer = 99999;
+for (const e of this.enemies) {
+  (e as any).shootCd = 99999; // sirve para runner y torreta
+}
+for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
+this.shots = [];
+this.controlsLocked = true;
+
+// 🔇 parar loops
+this.opts.audio?.stopSfx?.("motor");
+this.opts.audio?.stopBgm?.();
         break;
       }
     }
@@ -868,37 +958,40 @@ export class Level4 {
     }
 
     /* ===== Rivales ===== */
-    for (let i = 0; i < this.rivals.length; i++) {
-      const r = this.rivals[i];
-      r.phase += dt * (0.7 + 0.3 * i);
-      const osc = Math.sin(r.phase) * r.amp;
+for (let i = 0; i < this.rivals.length; i++) {
+  const r = this.rivals[i];
+  // ❌ sacá esta línea de acá:
+  // this.updateRacePositions();
 
-      const baseLapX = (this.lap - 1) * this.trackLength;
-      const rivalRelX = r.pos.x - baseLapX;
-      const playerRelX = (this.camX + this.player.x) - baseLapX;
-      const gap = playerRelX - rivalRelX;
+  r.phase += dt * (0.7 + 0.3 * i);
+  const osc = Math.sin(r.phase) * r.amp;
 
-      let catchup = 0;
-      if (gap > 450) catchup += 60;
-      if (gap < -450) catchup -= 40;
+  const baseLapX = (this.lap - 1) * this.trackLength;
+  const rivalRelX = r.pos.x - baseLapX;
+  const playerRelX = (this.camX + this.player.x) - baseLapX;
+  const gap = playerRelX - rivalRelX;
 
-      // handicap cuando estás en Modo Dios (les cuesta seguirte)
-      const godHandicap = this.godMode ? -160 : 0;
+  let catchup = 0;
+  if (gap > 450) catchup += 55;
+  if (gap < -450) catchup -= 35;
 
-      const rivalMaxWhenYouBoost = this.maxSpeed - 10;
-      const rivalMaxWhenCruise   = this.maxSpeed + 40;
+  const godHandicap = this.godMode ? -120 : 0;
 
-      const targetVBase = r.base + osc + catchup + godHandicap;
-      const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
-      const minRival = this.baseSpeed + 45;
+  const rivalMaxWhenYouBoost = this.maxSpeed - 15;
+  const rivalMaxWhenCruise   = this.maxSpeed + 35;
 
-      const targetV = Math.max(minRival, Math.min(maxRival, targetVBase));
-      r.speed = r.speed * 0.82 + targetV * 0.18;
+  const targetVBase = r.base + osc + catchup + godHandicap;
+  const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
+  const minRival = this.baseSpeed + 40;
 
-      r.pos.x += r.speed * dt;
-      r.sp.x = this.screenX(r.pos.x);
-      r.sp.y = r.pos.y;
-    }
+  const targetV = Math.max(minRival, Math.min(maxRival, targetVBase));
+  r.speed = r.speed * 0.82 + targetV * 0.18;
+
+  r.pos.x += r.speed * dt;
+  r.sp.x = this.screenX(r.pos.x);
+  r.sp.y = r.pos.y;
+}
+
 
     /* ===== Enemigos ===== */
     this.enemyTimer -= dt;
@@ -906,6 +999,7 @@ export class Level4 {
 
     for (const e of this.enemies) {
       if (e.kind === "runner") {
+        
         e.pos.x -= e.speed * dt;
         e.sp.x = this.screenX(e.pos.x);
         e.sp.y = this.playerY;
@@ -915,7 +1009,11 @@ export class Level4 {
           R.shootFlash -= dt;
           if (R.shootFlash <= 0 && !R.dead && this.tex.enemy) e.sp.texture = this.tex.enemy;
         }
-
+R.shootCd -= dt;
+if (R.shootCd <= 0 && !R.dead && !this.controlsLocked) {
+  this.enemyShoot(R);
+  R.shootCd = 0.6 + Math.random() * 0.7;
+}
         if (!e.dead && this.jumpOffset < 10) {
           const pb = this.player.getBounds();
           const eb = e.sp.getBounds();
@@ -954,6 +1052,9 @@ export class Level4 {
     for (const s of this.shots) {
       s.pos.x += s.vx * dt;
       s.pos.y += s.vy * dt;
+      // rotación del vinilo
+  const rs = (s.sp as any).rotSpeed ?? 0;
+  if (rs) s.sp.rotation += rs * dt;
       s.sp.x = this.screenX(s.pos.x);
       s.sp.y = s.pos.y;
 
@@ -1005,6 +1106,10 @@ export class Level4 {
     for (const s of this.playerShots) {
       s.pos.x += s.vx * dt; s.pos.y += s.vy * dt;
       s.sp.x = this.screenX(s.pos.x); s.sp.y = s.pos.y;
+      // rotación del vinilo (si existe rotSpeed)
+  const rs = (s.sp as any).rotSpeed ?? 0;
+  if (rs) s.sp.rotation += rs * dt;
+      s.sp.rotation = Math.sin(s.pos.x * 0.02) * 0.25; // wobble
 
       for (const e of this.enemies) {
         if (e.dead) continue;
@@ -1027,9 +1132,10 @@ export class Level4 {
 
     // culling enemigos
     this.enemies = this.enemies.filter(e => { const alive = e.pos.x > this.camX - 600; if (!alive) e.sp.destroy(); return alive; });
-
+    this.updateRacePositions();
     // minimapa
     this.updateMiniMap();
+    
   }
 
   /* =============================== Mini-mapa ============================== */
@@ -1112,6 +1218,76 @@ export class Level4 {
       }
     }
   }
+// Color por posición (1º dorado, 2º plateado, 3º gris)
+private colorForPlace(place: number): number {
+  if (place === 1) return 0xffd24a;
+  if (place === 2) return 0xc0c0c0;
+  return 0x7a7a7a;
+}
+
+// 🎵 Disparo como "nota musical"
+private makeNoteShot(): PIXI.Graphics {
+  const col = 0xff00ff;
+  const edge = 0xff00ff;
+  const g = new PIXI.Graphics();
+  g.circle(0, 0, 8).fill(col).stroke({ width: 2, color: edge, alignment: 1 }); // cabeza
+  g.roundRect(6, -26, 4, 26, 2).fill(col);                                     // plica
+  const flag = new PIXI.Graphics().roundRect(10, -26, 18, 10, 4).fill(col);    // banderín
+  flag.alpha = 0.95;
+  g.addChild(flag);
+  g.rotation = -0.12;
+  return g;
+}
+
+// 🎧 Disparo reggaetonero: vinilo girando
+private makeReggaetonDisc(scale = 4): PIXI.Graphics {
+  const g = new PIXI.Graphics();
+  const glow = new PIXI.Graphics().circle(0, 0, 16).fill({ color: 0xff33aa, alpha: 0.22 });
+  g.addChild(glow);
+  g.circle(0, 0, 12).fill(0x111111).stroke({ width: 2, color: 0xffffff, alignment: 1, alpha: 0.6 });
+  g.circle(0, 0, 9).stroke({ width: 1, color: 0xffffff, alpha: 0.25 });
+  g.circle(0, 0, 6).stroke({ width: 1, color: 0xffffff, alpha: 0.2 });
+  g.circle(0, 0, 4).fill(0xff33aa);
+  g.scale.set(scale); // 👈 agranda
+  return g;
+}
+
+
+// Labels de posición (sin flama)
+private setupPositionLabels() {
+  this.posTextP.anchor.set(0.5, 1);
+  this.posTextR1.anchor.set(0.5, 1);
+  this.posTextR2.anchor.set(0.5, 1);
+  (this.posTextP  as any).zIndex = 2000;
+  (this.posTextR1 as any).zIndex = 2000;
+  (this.posTextR2 as any).zIndex = 2000;
+  this.world.addChild(this.posTextP, this.posTextR1, this.posTextR2);
+}
+
+// Ordena por X de mundo y coloca 1/2/3 arriba de la cabeza
+private updateRacePositions() {
+  const playerWX = this.camX + this.player.x;
+  const r1WX = this.rivals[0]?.pos.x ?? -Infinity;
+  const r2WX = this.rivals[1]?.pos.x ?? -Infinity;
+
+  const rows = [
+    { sp: this.player,        wx: playerWX, label: this.posTextP },
+    { sp: this.rivals[0]?.sp, wx: r1WX,     label: this.posTextR1 },
+    { sp: this.rivals[1]?.sp, wx: r2WX,     label: this.posTextR2 },
+  ].filter(r => r.sp) as { sp: PIXI.Sprite; wx: number; label: PIXI.Text }[];
+
+  rows.sort((a, b) => b.wx - a.wx); // más adelante = mejor posición
+
+  const OFFSET = -36; // separacion sobre la cabeza
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const yTop = r.sp.y - r.sp.height * (r.sp.anchor?.y ?? 0.5);
+    r.label.text = String(i + 1);
+    (r.label.style as any).fill = this.colorForPlace(i + 1);
+    r.label.x = r.sp.x;
+    r.label.y = yTop - OFFSET;
+  }
+}
 
   /* ============================== Daño player ============================ */
   private hurtPlayer(dmg: number): boolean {
@@ -1137,6 +1313,9 @@ export class Level4 {
     for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
     for (const p of this.pickups) { try { p.sp.destroy(); } catch {} }
     for (const t of this.godTrail) { try { t.sp.destroy(); } catch {} }
+    try { this.posTextP.destroy(); } catch {}
+try { this.posTextR1.destroy(); } catch {}
+try { this.posTextR2.destroy(); } catch {}
     try { this.godHalo.destroy(); } catch {}
     try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
