@@ -61,7 +61,7 @@ export class Level4 {
 
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer);
-    this.stage.addChild(this.bgShade); // “modo noche” por encima del fondo
+    // this.stage.addChild(this.bgShade); // “modo noche” por encima del fondo
     this.stage.addChild(this.world);
     this.stage.addChild(this.hud);
     this.stage.addChild(this.overlay);
@@ -85,7 +85,7 @@ export class Level4 {
 
   stage = new PIXI.Container();
   bgLayer = new PIXI.Container();
-  bgShade = new PIXI.Graphics(); // “modo noche”
+  // bgShade = new PIXI.Graphics(); // “modo noche”
   world = new PIXI.Container();
   hud = new PIXI.Container();
   overlay = new PIXI.Container(); // countdown / resultados
@@ -103,9 +103,9 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
 
   /* ===== Pista / vueltas ===== */
   camX = 0;
-  trackLength = 10000;           // más largo que L3
+  trackLength = 26000;           // más largo que L3
   lapFinishX = this.trackLength;
-  lapsTotal = 15;                // más vueltas = más desafío
+  lapsTotal = 4;                // más vueltas = más desafío
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -270,7 +270,7 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
   /* ===== Modo Dios (más frecuente en L4) ===== */
   godMode = false;
   godTimer = 0;
-  godDuration = 16;          // segundos de invulnerabilidad/boost
+  godDuration = 4;          // segundos de invulnerabilidad/boost
   godPickupTimer = 12;       // ⬅ empieza antes que en L3
   godPickupMin = 12;         // ⬅ intervalos más cortos
   godPickupMax = 20;
@@ -309,6 +309,13 @@ enemyScale  = 0.65; // runners/torretas
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private screenX(worldX: number) { return worldX - this.camX; }
   private clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+/* ===== Anti-cheese borde derecho ===== */
+private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
+private edgeStickSec = 2.0;       // tiempo para activar penalización
+private edgePenaltyDur = 2.2;     // duración del empuje
+private edgePenaltySpeed = 720;   // px/s de empuje hacia la izquierda
+private edgeStickTimer = 0;       // acumula tiempo “pegado + saltando”
+private edgePenaltyTimer = 0;     // penalización activa
 
   private fmt(ms: number) {
     const m = Math.floor(ms / 60000);
@@ -423,10 +430,10 @@ enemyScale  = 0.65; // runners/torretas
     }
     this.bgLayer.addChild(this.bg1, this.bg2);
 
-    // “Modo noche”: lámina negra semitransparente encima del fondo
-    this.bgShade.clear().rect(0, 0, this.W, this.H).fill(0x000000);
-    this.bgShade.alpha = 0.28;
-    this.bgShade.zIndex = 50;
+    // // “Modo noche”: lámina negra semitransparente encima del fondo
+    // this.bgShade.clear().rect(0, 0, this.W, this.H).fill(0x000000);
+    // this.bgShade.alpha = 0.28;
+    // this.bgShade.zIndex = 50;
 
     // Suelo
     const gtex = this.tex.suelo ?? this.app.renderer.generateTexture(new PIXI.Graphics().rect(0,0,512,160).fill(0x222));
@@ -501,7 +508,7 @@ this.setupPositionLabels();
     this.timeText.text = "00:00.000";
 
     // Sonidos
-    this.opts.audio?.playBgmLevel1?.();
+    this.opts.audio?.playBgmLevel4?.();
     this.opts.audio?.playSfx?.("motor");
 
     // GOD: chance de 3 pickups en L4 (60%)
@@ -703,26 +710,34 @@ this.setTrafficLights(true, false, false);
   }
 
   private levelComplete(place: 1 | 2 | 3) {
-    if (this.finished) return;
-    this.finished = true;
+  if (this.finished) return;
+  this.finished = true;
+  this.controlsLocked = true;
 
-    // congelar combate y cortar sonidos
-    for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
-    this.shots = [];
-    this.invuln = 9999;
-    this.opts.audio?.stopSfx?.("motor");
-    this.opts.audio?.stopBgm?.();
+  // FREEZE combate / spawns (como L3)
+  this.invuln = 9999;
+  this.enemyTimer = 9999;
 
-    // texto final
-    const label = place === 1 ? "¡GANASTE!" : place === 2 ? "2º" : "3º";
-    this.showResultOverlay(label);
+  // destruir proyectiles para que no queden flotando (enemigos y jugador)
+  for (const s of this.shots)       { try { s.sp.destroy(); } catch {} }
+  for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
+  this.shots = [];
+  this.playerShots = [];
 
-    if (this.overlayTimer) clearTimeout(this.overlayTimer);
-    this.overlayTimer = window.setTimeout(() => {
-      this.overlay.visible = false;
-      this.opts.onLevelComplete?.(place);
-    }, 3200);
-  }
+  // ⛔ NO paramos el BGM (igual que L3). Si querés cortar solo el motor, descomentá:
+  // this.opts.audio?.stopSfx?.("motor");
+
+  const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
+  this.lapAnnounce.visible = false;
+this.lapAnnounceTimer = 0;
+  this.showResultOverlay(label);
+
+  if (this.overlayTimer) clearTimeout(this.overlayTimer);
+  this.overlayTimer = window.setTimeout(() => {
+    this.overlay.visible = false;
+    this.opts.onLevelComplete?.(place);
+  }, 2500); // mismo timing que L3
+}
 
   private endGame() {
     if (this.ended) return;
@@ -885,6 +900,34 @@ if (this.controlsLocked && !this.finished && !this.ended) {
       this.jumpOffset += this.jumpVy * dt;
       if (this.jumpOffset <= 0) { this.jumpOffset = 0; this.jumping = false; this.jumpVy = 0; }
     }
+// ==== Anti-cheese: pegado al borde derecho saltando ====
+if (!this.controlsLocked && !this.finished && !this.ended) {
+  const nearRight = this.playerX >= (this.maxX - this.edgeZonePx);
+  const abusingJump = this.jumping || !!this.input.a.fire;
+
+  if (nearRight && abusingJump) {
+    this.edgeStickTimer += dt;
+    if (this.edgeStickTimer >= this.edgeStickSec && this.edgePenaltyTimer <= 0) {
+      this.edgePenaltyTimer = this.edgePenaltyDur;
+      this.edgeStickTimer = 0;
+      this.showLapAnnounce?.("¡PENALIZACIÓN!");
+      this.opts.audio?.playOne?.("impact");
+    }
+  } else {
+    this.edgeStickTimer = Math.max(0, this.edgeStickTimer - dt * 0.5);
+  }
+
+  if (this.edgePenaltyTimer > 0) {
+    this.edgePenaltyTimer -= dt;
+    this.playerX -= this.edgePenaltySpeed * dt;
+
+    if (this.playerX > this.maxX - this.edgeZonePx) {
+      this.playerX = this.maxX - this.edgeZonePx;
+    }
+  }
+
+  this.playerX = Math.max(this.minX, Math.min(this.maxX, this.playerX));
+}
 
     // disparo jugador (si hay ammo)
     const shootPressed = (this.input as any).a.fire2 || (this.input as any).a.ctrl || (this.input as any).a.F;
@@ -933,20 +976,9 @@ if (this.controlsLocked && !this.finished && !this.ended) {
         this.lapFinishX += this.trackLength;
       } else {
         const rivalsAhead = this.rivals.filter(r => r.pos.x >= this.lapFinishX).length;
-        const place = (1 + rivalsAhead) as 1 | 2 | 3;
-        this.levelComplete(place);
-        this.enemyTimer = 99999;
-for (const e of this.enemies) {
-  (e as any).shootCd = 99999; // sirve para runner y torreta
-}
-for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
-this.shots = [];
-this.controlsLocked = true;
-
-// 🔇 parar loops
-this.opts.audio?.stopSfx?.("motor");
-this.opts.audio?.stopBgm?.();
-        break;
+      const place = (1 + rivalsAhead) as 1 | 2 | 3;
+this.levelComplete(place);
+break;
       }
     }
 
@@ -955,6 +987,14 @@ this.opts.audio?.stopBgm?.();
       this.finishSprite.x = this.screenX(this.lapFinishX);
       this.finishSprite.y = this.ground.y + this.FINISH_Y_OFFSET;
     }
+    // Fade anuncio (¡MODO DIOS! / VUELTA X / ¡ÚLTIMA VUELTA!)
+if (this.lapAnnounceTimer > 0) {
+  this.lapAnnounceTimer -= dt;
+  const t = Math.max(0, this.lapAnnounceTimer);
+  const total = 2.0;
+  this.lapAnnounce.alpha = t / total;
+  if (this.lapAnnounceTimer <= 0) this.lapAnnounce.visible = false;
+}
 
     /* ===== Rivales ===== */
 for (let i = 0; i < this.rivals.length; i++) {

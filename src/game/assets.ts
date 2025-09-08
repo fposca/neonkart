@@ -32,6 +32,22 @@ export const IMG = {
   finishFinal: "/assets/img/finish-final.png", // meta de la 3ª vuelta
   // fallback general opcional:
   finish: "/assets/img/finish.png",
+  fondoIce: "/assets/img/fondo-ice.jpg",
+  sueloIce: "/assets/img/suelo-ice.jpg",
+
+  kartIceFront:  "/assets/img/karting-ice-frente.png",
+  kartIceHit:    "/assets/img/karting-ice-hit.png",
+  kartIceDead:   "/assets/img/karting-ice-dead.png",
+  kartIceShoot:  "/assets/img/karting-ice-atack.png",
+
+  enemyIceFront:  "/assets/img/enemy-ice-frente.png",
+  enemyIceAttack: "/assets/img/enemy-ice-atack.png",   // ojo al nombre del archivo; si es “attack” cámbialo aquí
+  enemyIceDead:   "/assets/img/enemy-ice-dead.png",
+
+  rivalIce1: "/assets/img/racer-enemy.png",
+  rivalIce2: "/assets/img/racer-enemy2.png",
+  life: "/assets/img/life.png",
+  god:  "/assets/img/god.png",
 } as const;
 
 
@@ -50,6 +66,7 @@ export type SfxOneName =
   | "impact"
   | "pickup"
   | "countBeep"
+  | "ice"
   | "pickupGod"   // ⬅️ nuevo
   | "countGo";
 
@@ -67,6 +84,7 @@ export const SFX: Record<SfxLoopName | SfxOneName, string> = {
   pickup:     "/assets/sfx/sfx-pickup.mp3",
   crash:      "/assets/sfx/sfx-crash.mp3",
   impact:     "/assets/sfx/sfx-impact.mp3",
+  ice:     "/assets/sfx/ice.mp3",
   
 
   // UI / largada
@@ -75,9 +93,15 @@ export const SFX: Record<SfxLoopName | SfxOneName, string> = {
 };
 
 // ===== MÚSICA =====
-export const BGM: Record<"menu" | "nivel1", string> = {
+export const BGM: Record< "menu" | "nivel1" | "nivel2" | "nivel3" | "nivel4" | "nivel5" | "nivel6" | "nivel7", string> = {
   menu:   "/assets/music/bgm-menu.mp3",
   nivel1: "/assets/music/bgm-nivel1.mp3",
+  nivel2: "/assets/music/bgm-nivel2.mp3",
+  nivel3: "/assets/music/bgm-nivel3.mp3",
+  nivel4: "/assets/music/bgm-nivel4.mp3",
+  nivel5: "/assets/music/bgm-nivel5.mp3",
+  nivel6: "/assets/music/bgm-nivel6.mp3",
+   nivel7: "/assets/music/bgm-nivel7.mp3",
 };
 
 

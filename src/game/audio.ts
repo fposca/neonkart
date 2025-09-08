@@ -83,6 +83,13 @@ export class AudioBus {
 
   playBgmMenu()   { this.playBgmFrom(BGM.menu,   "menu"); }
   playBgmLevel1() { this.playBgmFrom(BGM.nivel1, "nivel1"); }
+  playBgmLevel2() { this.playBgmFrom(BGM.nivel2, "nivel2"); } // ⬅️ nuevo
+  playBgmLevel3() { this.playBgmFrom(BGM.nivel3, "nivel3"); } // ⬅️ nuevo
+  playBgmLevel4() { this.playBgmFrom(BGM.nivel4, "nivel4"); } // ⬅️ nuevo
+  playBgmLevel5() { this.playBgmFrom(BGM.nivel5, "nivel5"); }
+   playBgmLevel6() { this.playBgmFrom(BGM.nivel6, "nivel6"); }
+   playBgmLevel7() { this.playBgmFrom(BGM.nivel7, "nivel7"); }
+   
 
   stopBgm() {
     if (!this.bgm) return;

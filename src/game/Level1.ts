@@ -60,7 +60,7 @@ export class Level1 {
 
   // pista / metas
   camX = 0;
-  trackLength = 6400;               // longitud de UNA vuelta (distancia)
+  trackLength = 24000;               // longitud de UNA vuelta (distancia)
   lapFinishX = this.trackLength;    // worldX de meta de la vuelta actual
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
 
@@ -71,10 +71,10 @@ export class Level1 {
   finishTexFallback?: PIXI.Texture;
 
   // vueltas (MODO DISTANCIA)
-  lapsTotal = 10;
+  lapsTotal = 3;
   lap = 1;
   lapText = new PIXI.Text({
-    text: "VUELTA 1/10",
+    text: "VUELTA 1/7",
     style: { fill: 0xfff090, fontSize: 18, fontFamily: "Arial", fontWeight: "900" },
   });
 
@@ -210,7 +210,7 @@ godFireTimer = 0;
 
   godMode = false;
   godTimer = 0;
-  godDuration = 3; // segundos
+  godDuration = 4; // segundos
   // spawn MUY raro (1 por nivel, 25% chance de 2)
   godPickupTimer = 24;   // primer intento tarde
   godPickupMin = 28;
@@ -253,6 +253,14 @@ this.world.addChild(this.godFireContainer);
   }
 
   /* ============================ Helpers ================================== */
+  /* ===== Anti-cheese borde derecho ===== */
+private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
+private edgeStickSec = 2.0;       // tiempo para activar penalización
+private edgePenaltyDur = 2.2;     // duración del empuje
+private edgePenaltySpeed = 720;   // px/s de empuje hacia la izquierda
+private edgeStickTimer = 0;       // acumula tiempo “pegado + saltando”
+private edgePenaltyTimer = 0;     // penalización activa
+
   private nextEnemyIn() { this.enemyTimer = this.enemyMin + Math.random() * (this.enemyMax - this.enemyMin); }
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private screenX(worldX: number) { return worldX - this.camX; }
@@ -1239,6 +1247,34 @@ this.updateGodFire(dt);
       this.jumpOffset += this.jumpVy * dt;
       if (this.jumpOffset <= 0) { this.jumpOffset = 0; this.jumping = false; this.jumpVy = 0; }
     }
+// ==== Anti-cheese: pegado al borde derecho saltando ====
+if (!this.controlsLocked && !this.finished && !this.ended) {
+  const nearRight = this.playerX >= (this.maxX - this.edgeZonePx);
+  const abusingJump = this.jumping || !!this.input.a.fire;
+
+  if (nearRight && abusingJump) {
+    this.edgeStickTimer += dt;
+    if (this.edgeStickTimer >= this.edgeStickSec && this.edgePenaltyTimer <= 0) {
+      this.edgePenaltyTimer = this.edgePenaltyDur;
+      this.edgeStickTimer = 0;
+      this.showLapAnnounce?.("¡PENALIZACIÓN!");
+      this.opts.audio?.playOne?.("impact");
+    }
+  } else {
+    this.edgeStickTimer = Math.max(0, this.edgeStickTimer - dt * 0.5);
+  }
+
+  if (this.edgePenaltyTimer > 0) {
+    this.edgePenaltyTimer -= dt;
+    this.playerX -= this.edgePenaltySpeed * dt;
+
+    if (this.playerX > this.maxX - this.edgeZonePx) {
+      this.playerX = this.maxX - this.edgeZonePx;
+    }
+  }
+
+  this.playerX = Math.max(this.minX, Math.min(this.maxX, this.playerX));
+}
 
     // disparo
     const shootPressed = (this.input as any).a.fire2 || (this.input as any).a.ctrl || (this.input as any).a.F;

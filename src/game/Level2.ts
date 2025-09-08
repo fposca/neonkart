@@ -95,9 +95,9 @@ enemyScale  = 0.65; // runners/torretas
 
   /* ===== Track / vueltas ===== */
   camX = 0;
-  trackLength = 6000;
+  trackLength = 25000;
   lapFinishX = this.trackLength;
-  lapsTotal = 10;
+  lapsTotal = 3;
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -227,7 +227,7 @@ enemyScale  = 0.65; // runners/torretas
   /* ===== Modo Dios ===== */
   godMode = false;
   godTimer = 0;
-  godDuration = 15;          // ⬅ Ajustá la duración acá
+  godDuration = 4;          // ⬅ Ajustá la duración acá
   godPickupTimer = 24;       // aparece tarde
   godPickupMin = 28;
   godPickupMax = 42;
@@ -295,6 +295,12 @@ posFlameTime = 0;
   lampGreen = new PIXI.Graphics();
 
   /* ============================ Helpers ============================ */
+  private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
+private edgeStickSec = 2.0;       // tiempo para activar penalización
+private edgePenaltyDur = 2.2;     // duración del empuje
+private edgePenaltySpeed = 720;   // px/s de empuje hacia la izquierda
+private edgeStickTimer = 0;       // acumula tiempo “pegado + saltando”
+private edgePenaltyTimer = 0;     // penalización activa
   private nextEnemyIn() { this.enemyTimer = this.enemyMin + Math.random() * (this.enemyMax - this.enemyMin); }
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private screenX(worldX: number) { return worldX - this.camX; }
@@ -1092,6 +1098,34 @@ this.updateGodFire(dt);
       this.jumpOffset += this.jumpVy * dt;
       if (this.jumpOffset <= 0) { this.jumpOffset = 0; this.jumping = false; this.jumpVy = 0; }
     }
+// ==== Anti-cheese: pegado al borde derecho saltando ====
+if (!this.controlsLocked && !this.finished && !this.ended) {
+  const nearRight = this.playerX >= (this.maxX - this.edgeZonePx);
+  const abusingJump = this.jumping || !!this.input.a.fire;
+
+  if (nearRight && abusingJump) {
+    this.edgeStickTimer += dt;
+    if (this.edgeStickTimer >= this.edgeStickSec && this.edgePenaltyTimer <= 0) {
+      this.edgePenaltyTimer = this.edgePenaltyDur;
+      this.edgeStickTimer = 0;
+      this.showLapAnnounce?.("¡PENALIZACIÓN!");
+      this.opts.audio?.playOne?.("impact");
+    }
+  } else {
+    this.edgeStickTimer = Math.max(0, this.edgeStickTimer - dt * 0.5);
+  }
+
+  if (this.edgePenaltyTimer > 0) {
+    this.edgePenaltyTimer -= dt;
+    this.playerX -= this.edgePenaltySpeed * dt;
+
+    if (this.playerX > this.maxX - this.edgeZonePx) {
+      this.playerX = this.maxX - this.edgeZonePx;
+    }
+  }
+
+  this.playerX = Math.max(this.minX, Math.min(this.maxX, this.playerX));
+}
 
     // disparo jugador (requiere pedal)
     const shootPressed = (this.input as any).a.fire2 || (this.input as any).a.F;

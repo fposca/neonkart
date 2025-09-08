@@ -1,3 +1,4 @@
+// App.tsx
 import { useEffect, useRef, useState } from "react";
 import { Game } from "./game/Game";
 import { AudioBus } from "./game/audio";
@@ -72,7 +73,7 @@ export default function App() {
 
   const startGame = async () => {
     audioRef.current.stopAll?.(); // cortar BGM de menú antes de entrar al juego
-    destroyGame();
+    destroyGame();                // crear juego NUEVO (empieza en Level 1)
     const root = hostRef.current!; root.innerHTML = "";
     const game = new Game({ onGameOver: () => setMode("over"), audio: audioRef.current });
     gameRef.current = game;
@@ -88,7 +89,12 @@ export default function App() {
     }
   };
 
-  const retry = () => startGame();
+  // ⬇️ Cambiado: reintentar relanza el ÚLTIMO nivel en la MISMA instancia
+  const retry = async () => {
+    if (!gameRef.current) { await startGame(); return; } // fallback
+    setMode("playing");               // sacá el overlay de 'over'
+    await gameRef.current.retryLastLevel();
+  };
 
   // 👇 No reinicies BGM si venimos de "controls"
   const backToMenu = () => {
@@ -100,15 +106,12 @@ export default function App() {
       audioRef.current.stopAll?.();
       audioRef.current.playBgmMenu?.();
     }
-    // si venimos de "controls", no tocamos nada → BGM continúa
   };
 
-  // Limpieza al desmontar
   useEffect(() => {
     return () => { try { audioRef.current.stopAll?.(); } catch {} destroyGame(); };
   }, []);
 
-  // Desbloqueo de audio una sola vez y disparar música de menú
   useEffect(() => {
     const unlock = () => {
       audioRef.current.resume?.();
@@ -118,19 +121,16 @@ export default function App() {
     return () => window.removeEventListener("pointerdown", unlock);
   }, []);
 
-  // Asegurar BGM de menú si estamos en menú
   useEffect(() => {
     if (mode === "menu") audioRef.current.playBgmMenu?.();
   }, [mode]);
 
-  // Escalado fijo 1280x720
   useEffect(() => {
     const root = hostRef.current!; const W = 1280, H = 720;
     const fit = () => { const sw = window.innerWidth, sh = window.innerHeight; const scale = Math.min(sw / W, sh / H); root.style.width = `${W * scale}px`; root.style.height = `${H * scale}px`; };
     fit(); window.addEventListener("resize", fit); return () => window.removeEventListener("resize", fit);
   }, []);
 
-  /* ====== Datos de la tabla de controles ====== */
   const controlsData = [
     { key: "→ (Flecha derecha)", action: "Acelera (y se mueve un poco a la derecha)" },
     { key: "← (Flecha izquierda)", action: "Mueve a la izquierda" },
@@ -149,13 +149,7 @@ export default function App() {
       {mode === "menu" && (
         <div style={uiWrap}>
           <div style={panel}>
-            {/* LOGO */}
-            <img
-              style={logoStyle}
-              src={`${import.meta.env.BASE_URL}assets/img/neonkart.png`}
-              alt="Neonboy Kart"
-            />
-
+            <img style={logoStyle} src={`${import.meta.env.BASE_URL}assets/img/neonkart.png`} alt="Neonboy Kart" />
             <button
               style={{ ...btnPrimary, opacity: isLoading ? 0.7 : 1, pointerEvents: isLoading ? "none" : "auto" }}
               onClick={startGame}
@@ -170,14 +164,7 @@ export default function App() {
       {mode === "controls" && (
         <div style={uiWrap}>
           <div style={panel}>
-            <img
-              style={logoStyle}
-              src={`${import.meta.env.BASE_URL}assets/img/neonkart.png`}
-              alt="Neonboy Kart"
-            />
-            {/* <h2 style={subtitle}>CONTROLES</h2> */}
-
-            {/* ===== Tabla con cebrado ===== */}
+            <img style={logoStyle} src={`${import.meta.env.BASE_URL}assets/img/neonkart.png`} alt="Neonboy Kart" />
             <div style={tableWrap}>
               <table style={tableStyle}>
                 <thead>
@@ -227,7 +214,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Botonera táctil */}
       {mode === "playing" && isTouchDevice() && (
         <div style={touchWrap} className="hud-touch-app">
           <TouchBtn label="◀" onDown={() => pressKey("ArrowLeft")}  onUp={() => releaseKey("ArrowLeft")}  style={{ left: 16 }} />
@@ -250,68 +236,47 @@ export default function App() {
 const menuBg: React.CSSProperties = {
   position: "fixed", inset: 0, zIndex: 1, pointerEvents: "none",
   backgroundImage: `linear-gradient(rgba(0,0,0,.35), rgba(0,0,0,.55)), url('${import.meta.env.BASE_URL}assets/img/menuBack.jpg')`,
-  backgroundSize: "contain",           // "cover" si preferís llenar (aunque recorte)
+  backgroundSize: "contain",
   backgroundRepeat: "no-repeat",
   backgroundPosition: "center center",
   backgroundAttachment: "fixed",
   backgroundColor: "#000"
 };
 
-const uiWrap: React.CSSProperties = { position: "fixed", inset: 0, display: "grid", placeItems: "center", zIndex: 2, background: "transparent" };
-const panel: React.CSSProperties  = { width: 520, maxWidth: "92vw", background: "rgba(20,20,20,0.2)", padding: 24, boxShadow: "0 12px 40px rgba(0,0,0,0.45)", textAlign: "center", color: "#eaeaea", fontFamily: "system-ui, Segoe UI, Roboto, sans-serif", borderRadius: 16 };
+const uiWrap: React.CSSProperties = {
+  position: "fixed", inset: 0, zIndex: 2, display: "flex",
+  alignItems: "center", justifyContent: "center", padding: 16,
+  overflowY: "auto", WebkitOverflowScrolling: "touch" as any,
+  overscrollBehaviorY: "contain" as any, background: "transparent",
+};
+
+const panel: React.CSSProperties  = {
+  width: 520, maxWidth: "92vw", maxHeight: "calc(100dvh - 64px)",
+  overflowY: "auto", WebkitOverflowScrolling: "touch" as any,
+  background: "rgba(20,20,20,0.2)", padding: 24,
+  boxShadow: "0 12px 40px rgba(0,0,0,0.45)", textAlign: "center",
+  color: "#eaeaea", fontFamily: "system-ui, Segoe UI, Roboto, sans-serif",
+  borderRadius: 16,
+};
+
 const title: React.CSSProperties  = { margin: "6px 0 16px", fontSize: 36, color: "#fa66a6" };
 const btnBase: React.CSSProperties = { display: "block", width: "100%", padding: "12px 16px", margin: "12px 0", fontSize: 18, borderRadius: 12, border: "1px solid #333", cursor: "pointer" };
 const btnPrimary: React.CSSProperties = { ...btnBase, background: "rgba(247, 86, 215, 0.82)", color: "#091218", fontWeight: 700 };
 const btn: React.CSSProperties       = { ...btnBase, background: "rgba(20,20,20,0.6)", color: "#eaeaea" };
 
-const logoStyle: React.CSSProperties = {
-  display: "block",
-  margin: "0 auto 12px",
-  width: "min(40vw, 260px)",
-  height: "auto"
-};
+const logoStyle: React.CSSProperties = { display: "block", margin: "0 auto 12px", width: "min(40vw, 260px)", height: "auto" };
 
-/* ===== Tabla de controles (zebra con alpha .6) ===== */
 const tableWrap: React.CSSProperties = {
-  margin: "10px 0 20px",
-  borderRadius: 12,
-  overflow: "hidden",
-  border: "1px solid rgba(255,255,255,0.08)",
-  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+  margin: "10px 0 20px", borderRadius: 12, overflow: "hidden",
+  border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
   backdropFilter: "blur(2px)"
 };
 
-const tableStyle: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: 16,
-  textAlign: "left"
-};
-
-const thCommon: React.CSSProperties = {
-  padding: "10px 14px",
-  fontWeight: 800,
-  letterSpacing: 0.3,
-  background: "rgba(250, 102, 166, 0.6)", // encabezado con acento y alpha .6
-  color: "#1c0f17"
-};
-
+const tableStyle: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 16, textAlign: "left" };
+const thCommon: React.CSSProperties = { padding: "10px 14px", fontWeight: 800, letterSpacing: 0.3, background: "rgba(250, 102, 166, 0.6)", color: "#1c0f17" };
 const thStyleLeft: React.CSSProperties  = { ...thCommon, width: "44%" };
 const thStyleRight: React.CSSProperties = { ...thCommon, width: "56%" };
-
-const td: React.CSSProperties = {
-  padding: "10px 14px",
-  borderBottom: "1px solid rgba(255,255,255,0.06)",
-  color: "#eee"
-};
-
-const tdKey: React.CSSProperties = {
-  ...td,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  fontWeight: 700,
-  color: "#fff"
-};
-
-// Cebrado (dos tiras semitransparentes con alpha .6)
-const zebraA: React.CSSProperties = { background: "rgba(18,18,18,0.6)" }; // fila impar
-const zebraB: React.CSSProperties = { background: "rgba(36,36,36,0.6)" }; // fila par
+const td: React.CSSProperties = { padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "#eee" };
+const tdKey: React.CSSProperties = { ...td, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontWeight: 700, color: "#fff" };
+const zebraA: React.CSSProperties = { background: "rgba(18,18,18,0.6)" };
+const zebraB: React.CSSProperties = { background: "rgba(36,36,36,0.6)" };

@@ -109,9 +109,9 @@ enemyScale  = 0.65; // runners/torretas
 
   /* ===== Pista / vueltas (modo distancia, MÁS LARGO) ===== */
   camX = 0;
-  trackLength = 9000;            // <- vueltas más largas que L1/L2
+  trackLength = 25000;            // <- vueltas más largas que L1/L2
   lapFinishX = this.trackLength; // worldX de meta de la vuelta actual
-  lapsTotal = 12;                // (puede cambiarse)
+  lapsTotal = 3;                // (puede cambiarse)
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -283,7 +283,7 @@ enemyScale  = 0.65; // runners/torretas
   /* ===== Modo Dios ===== */
   godMode = false;
   godTimer = 0;
-  godDuration = 15;       // ⬅ Ajustá la duración acá
+  godDuration = 4;       // ⬅ Ajustá la duración acá
   // spawn MUY raro (1 por nivel, 25% chance de 2)
   godPickupTimer = 24;    // primer intento tarde
   godPickupMin = 28;
@@ -320,6 +320,13 @@ enemyScale  = 0.65; // runners/torretas
   private async tryMany(paths: (string | undefined)[]) { for (const p of paths) { const t = await this.tryLoad(p); if (t) return t; } return undefined; }
   private screenX(worldX: number) { return worldX - this.camX; }
   private clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+/* ===== Anti-cheese borde derecho ===== */
+private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
+private edgeStickSec = 2.0;       // tiempo para activar penalización
+private edgePenaltyDur = 2.2;     // duración del empuje
+private edgePenaltySpeed = 720;   // px/s de empuje hacia la izquierda
+private edgeStickTimer = 0;       // acumula tiempo “pegado + saltando”
+private edgePenaltyTimer = 0;     // penalización activa
 
   private fmt(ms: number) {
     const m = Math.floor(ms / 60000);
@@ -541,7 +548,7 @@ enemyScale  = 0.65; // runners/torretas
     this.timeText.text = "00:00.000";
 
     // Sonidos (mismos que L1)
-    this.opts.audio?.playBgmLevel1?.();
+    this.opts.audio?.playBgmLevel3?.();
     this.opts.audio?.playSfx?.("motor");
 
     // Countdown
@@ -895,6 +902,7 @@ if (this.controlsLocked && !this.finished && !this.ended) {
     this.goFlashTimer -= dt;
     (this.countdownText as any).alpha = 0.55 + 0.45 * Math.sin(this.goFlashTimer * 20);
   }
+  
 }
 
 
@@ -991,6 +999,34 @@ if (this.controlsLocked && !this.finished && !this.ended) {
       this.jumpOffset += this.jumpVy * dt;
       if (this.jumpOffset <= 0) { this.jumpOffset = 0; this.jumping = false; this.jumpVy = 0; }
     }
+// ==== Anti-cheese: pegado al borde derecho saltando ====
+if (!this.controlsLocked && !this.finished && !this.ended) {
+  const nearRight = this.playerX >= (this.maxX - this.edgeZonePx);
+  const abusingJump = this.jumping || !!this.input.a.fire;
+
+  if (nearRight && abusingJump) {
+    this.edgeStickTimer += dt;
+    if (this.edgeStickTimer >= this.edgeStickSec && this.edgePenaltyTimer <= 0) {
+      this.edgePenaltyTimer = this.edgePenaltyDur;
+      this.edgeStickTimer = 0;
+      this.showLapAnnounce?.("¡PENALIZACIÓN!");
+      this.opts.audio?.playOne?.("impact");
+    }
+  } else {
+    this.edgeStickTimer = Math.max(0, this.edgeStickTimer - dt * 0.5);
+  }
+
+  if (this.edgePenaltyTimer > 0) {
+    this.edgePenaltyTimer -= dt;
+    this.playerX -= this.edgePenaltySpeed * dt;
+
+    if (this.playerX > this.maxX - this.edgeZonePx) {
+      this.playerX = this.maxX - this.edgeZonePx;
+    }
+  }
+
+  this.playerX = Math.max(this.minX, Math.min(this.maxX, this.playerX));
+}
 
     // disparo jugador (solo si tenés el pickup activo y munición)
     const shootPressed = (this.input as any).a.fire2 || (this.input as any).a.ctrl || (this.input as any).a.F;
