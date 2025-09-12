@@ -1,8 +1,13 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable no-empty */
 // src/game/Level3.ts
 import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
 import { Input } from "./input";
 import type { AudioBus } from "./audio";
+import { getTuning } from "./difficulty";
+import { getSkin } from "./skins";
+
 
 
 /* =============================== Tipos =================================== */
@@ -31,7 +36,7 @@ type Turret = {
 type Enemy = Runner | Turret;
 type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
 // ⬇️ ahora soporta “life” y “god”
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" | "shield" };
 
 type Rival = {
   sp: PIXI.Sprite;
@@ -46,6 +51,8 @@ type LevelOpts = {
   onGameOver?: () => void;
   onLevelComplete?: (place: 1 | 2 | 3) => void;
   audio?: AudioBus;
+   difficulty?: import("./difficulty").DifficultyId; // 👈
+skin?: import("./skins").SkinId;     
 };
 
 /* ============================== Clase ==================================== */
@@ -59,7 +66,11 @@ export class Level3 {
     this.app = app;
     this.input = input;
     this.opts = opts;
+     this.tuning  = getTuning(opts.difficulty);
+  this.skinDef = getSkin(opts.skin);
 
+  this.tuning = getTuning(opts.difficulty);
+  this.skinDef = getSkin(opts.skin);
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer);
     this.stage.addChild(this.world);
@@ -71,6 +82,9 @@ export class Level3 {
     // FX Modo Dios
     this.godHalo.visible = false;
     this.godHalo.zIndex = 990;      // debajo del player (1000)
+    this.shieldRing.zIndex = 995;           // debajo del player (1000)
+this.shieldRing.visible = false;
+this.world.addChild(this.shieldRing);
     this.trailContainer.zIndex = 985;
     this.world.addChild(this.trailContainer, this.godHalo);
   }
@@ -97,6 +111,34 @@ readonly TURRET_CHANCE = 0.35;     // mezcla (ajustable). Si querés ver más to
 playerScale = 0.65; // kart del jugador
 rivalScale  = 0.65; // Fredy/Doctor
 enemyScale  = 0.65; // runners/torretas
+// ==== SKIN ====
+private skinDef!: ReturnType<typeof getSkin>;
+private tuning!: ReturnType<typeof getTuning>;
+tex: Record<string, PIXI.Texture | undefined> = {}; // si no lo tenés ya
+
+// ==== DRIFT / BOOST dedicada ====
+driftHold = 0;
+driftBoostTimer = 0;
+driftBoostDuration = 0.8;   // dura un poquito más
+driftBoostPower = 2160;     // “patada” de velocidad
+driftCooldown = 15;         // 15s para reutilizar
+driftCdTimer = 0;
+_prevDrift = false;
+
+// ==== SHIELD ====
+
+shieldCharges = 0;
+shieldMax = 5;
+shieldText = new PIXI.Text({
+  text: "",
+  style: { fill: 0x87e6ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+});
+shieldRing = new PIXI.Graphics();
+shieldPulseT = 0; // animación
+// timers de spawn del pickup shield
+shieldPickupTimer = 14; // primer intento ~14s
+shieldPickupMin   = 18;
+shieldPickupMax   = 26;
 
   /* ===== Fondo scroll ===== */
   bg1 = new PIXI.Sprite();
@@ -261,8 +303,11 @@ enemyScale  = 0.65; // runners/torretas
   /* ===== Enemigos ===== */
   enemies: Enemy[] = [];
   enemyTimer = 0;
-  enemyMin = 2.4;
-  enemyMax = 4.0;
+baseEnemyMin = 2.5;
+baseEnemyMax = 4.5;
+
+get enemyMin() { return this.baseEnemyMin / this.tuning.enemyMultiplier; }
+get enemyMax() { return this.baseEnemyMax / this.tuning.enemyMultiplier; }
 
   /* ===== Rivales ===== */
   rivals: Rival[] = [];
@@ -280,6 +325,10 @@ enemyScale  = 0.65; // runners/torretas
   lifePickupMin = 12;    // luego 12..
   lifePickupMax = 18;    // ..a 18s
 
+   private vibrate(ms: number) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    try { (navigator as any).vibrate?.(ms); } catch { }
+  }
   /* ===== Modo Dios ===== */
   godMode = false;
   godTimer = 0;
@@ -315,11 +364,45 @@ enemyScale  = 0.65; // runners/torretas
   lampGreen = new PIXI.Graphics();
 
   /* ============================ Helpers ================================== */
+  private setShield(on: boolean) {
+  this.shieldRing.visible = on;
+  if (!on) { this.shieldRing.clear(); }
+}
+
+private updateShieldHud() {
+  this.shieldText.text = this.shieldCharges > 0 ? `Shield: ${this.shieldCharges}` : "";
+}
+
+private updateShieldFX(dt: number) {
+  if (!this.shieldRing.visible) return;
+  this.shieldPulseT += dt;
+  const r = 54 + Math.sin(this.shieldPulseT * 6) * 3;
+  this.shieldRing.clear();
+  this.shieldRing.circle(0, 0, r).stroke({ width: 3, color: 0x87e6ff, alpha: 0.9 });
+  // seguir al jugador
+  this.shieldRing.position.set(this.player.x, this.player.y - this.jumpOffset);
+}
+
+private spawnShieldPickup() {
+  if (this.controlsLocked) return;
+  const x = this.camX + this.W + 200;
+  const y = this.playerY - 46;
+  const sp = new PIXI.Sprite(this.tex.shield ?? PIXI.Texture.WHITE);
+  sp.anchor.set(0.5); sp.zIndex = 820;
+  if (!this.tex.shield) {
+    const g = new PIXI.Graphics().circle(0,0,10).fill(0x87e6ff);
+    sp.texture = this.app.renderer.generateTexture(g);
+  }
+  this.world.addChild(sp);
+  this.pickups.push({ sp, pos: { x, y }, kind: "shield" });
+}
+
   private nextEnemyIn() { this.enemyTimer = this.enemyMin + Math.random() * (this.enemyMax - this.enemyMin); }
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private async tryMany(paths: (string | undefined)[]) { for (const p of paths) { const t = await this.tryLoad(p); if (t) return t; } return undefined; }
   private screenX(worldX: number) { return worldX - this.camX; }
   private clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+
 /* ===== Anti-cheese borde derecho ===== */
 private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
 private edgeStickSec = 2.0;       // tiempo para activar penalización
@@ -446,8 +529,25 @@ private edgePenaltyTimer = 0;     // penalización activa
 
     // Pickups
     this.tex.pedal = await this.tryLoad((IMG as any).pedalDist ?? IMG.pedalDist);
+
+    // 2) === OVERRIDE por skin ANTES de crear el sprite del jugador ===
+    const skin = this.skinDef; // viene del constructor: this.skinDef = getSkin(opts.skin)
+    if (skin) {
+      const side = await this.tryLoad(skin.kartSide);
+      const hit = await this.tryLoad(skin.kartHit);
+      const dead = await this.tryLoad(skin.kartDead);
+      const shoot = await this.tryLoad(skin.kartShoot);
+      if (side) this.tex.kart = side;
+      if (hit) this.tex.kartHit = hit;
+      if (dead) this.tex.kartDead = dead;
+      if (shoot) this.tex.kartShoot = shoot;
+    }
+
     this.tex.life  = await this.tryLoad((IMG as any).life ?? "/assets/img/life.png");
     this.tex.god   = await this.tryLoad((IMG as any).god ?? "/assets/img/god.png");
+        this.tex.shield = await this.tryLoad((IMG as any).shield ?? "/assets/img/shield.png");
+
+
     // suerte: a veces puede aparecer un segundo
     this.godPickupsMax = Math.random() < 0.25 ? 2 : 1;
 
@@ -490,6 +590,9 @@ private edgePenaltyTimer = 0;     // penalización activa
 
     this.ammoText.position.set(0, 40);
     this.hud.addChild(this.ammoText);
+     // ⬇️ NUEVO: texto de escudo debajo del ammo
+    this.shieldText.position.set(140, 40);
+    this.hud.addChild(this.shieldText);
 
     this.timeText.position.set(200, 40);
     this.hud.addChild(this.timeText);
@@ -499,6 +602,8 @@ private edgePenaltyTimer = 0;     // penalización activa
     this.updateLapHud();
 
     this.levelTag.position.set(230, 64);
+        this.levelTag.text = `L3 • ${this.opts.difficulty ?? "normal"}`;
+
     this.hud.addChild(this.levelTag);
 
     // Mini-mapa
@@ -692,7 +797,7 @@ this.setTrafficLights(true, false, false);
   const sxW = from.pos.x,        sy = from.pos.y - 24;
   const dxW = this.camX + this.player.x, dy = this.player.y - 10;
   const ang = Math.atan2(dy - sy, dxW - sxW);
-  const v = 430;
+const v = 430 * (0.9 + 0.4 * this.tuning.enemyMultiplier);
 
   // vinilo grande para ambos; podés diferenciar tamaños si querés
   const size = from.kind === "turret" ? this.DISC_SCALE_TURRET : this.DISC_SCALE_RUNNER;
@@ -854,6 +959,29 @@ private levelComplete(place: 1 | 2 | 3) {
 
   /* =============================== Update ================================ */
   update(dt: number) {
+const drifting = !!this.input.a.drift && !this.controlsLocked;
+if (drifting) {
+  this.driftHold += dt;
+} else if (this._prevDrift && !drifting) {
+  if (this.driftHold >= 0.8 && this.driftCdTimer <= 0) {
+    this.driftBoostTimer = this.driftBoostDuration;
+    this.driftCdTimer = this.driftCooldown;
+    this.showLapAnnounce?.("¡BOOST!");
+    this.opts.audio?.playOne?.("boost");
+    this.vibrate?.(40);
+  }
+  this.driftHold = 0;
+}
+this._prevDrift = drifting;
+
+if (this.driftBoostTimer > 0) this.driftBoostTimer -= dt;
+const cdBefore = this.driftCdTimer;
+if (this.driftCdTimer > 0) {
+  this.driftCdTimer = Math.max(0, this.driftCdTimer - dt);
+  if (cdBefore > 0 && this.driftCdTimer === 0) this.showLapAnnounce?.("Boost listo");
+}
+
+
     if (!this.ready) return;
     if (this.ended) return;
     if (this.finished) return;
@@ -979,10 +1107,12 @@ if (this.controlsLocked && !this.finished && !this.ended) {
       if (this.lapAnnounceTimer <= 0) this.lapAnnounce.visible = false;
     }
 
-    // velocidad / lateral (x2 en Modo Dios)
+    // velocidad jugador (x2 en godMode)
     const accelPressed = this.input.a.right && !this.controlsLocked;
     const boost = this.godMode ? 2.0 : 1.0;
-    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost;
+    const driftExtra = this.driftBoostTimer > 0 ? this.driftBoostPower : 0;
+    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost + driftExtra;
+    
     if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
     else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
 
@@ -1060,6 +1190,8 @@ const gfx = this.makeNoteShot(); // 🎵
     // aplicar jugador
     this.player.x = this.playerX;
     this.player.y = this.playerY - this.jumpOffset;
+        this.updateShieldFX(dt);
+
 
     // vueltas (solo distancia)
     const playerWorldX = this.camX + this.player.x;
@@ -1112,7 +1244,7 @@ for (let i = 0; i < this.rivals.length; i++) {
   const godHandicap = this.godMode ? -120 : 0;
 
   const rivalMaxWhenYouBoost = this.maxSpeed - 15;
-  const rivalMaxWhenCruise   = this.maxSpeed + 35;
+const rivalMaxWhenCruise = this.maxSpeed + 35 + 40 * (this.tuning.enemyMultiplier - 1);
 
   const targetVBase = r.base + osc + catchup + godHandicap;
   const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
@@ -1240,6 +1372,11 @@ if (e.shootCd <= 0 && !e.dead && !this.controlsLocked) {
       // reinicia el temporizador; la cuenta de “spawned” se hace al agarrarlo
       this.godPickupTimer = this.godPickupMin + Math.random() * (this.godPickupMax - this.godPickupMin);
     }
+this.shieldPickupTimer -= dt;
+if (this.shieldPickupTimer <= 0) {
+  this.spawnShieldPickup();
+  this.shieldPickupTimer = this.shieldPickupMin + Math.random() * (this.shieldPickupMax - this.shieldPickupMin);
+}
 
     for (const p of this.pickups) {
       p.pos.x -= this.baseSpeed * dt;
@@ -1360,7 +1497,15 @@ if (e.shootCd <= 0 && !e.dead && !this.controlsLocked) {
       this.updateAmmoHud();
       this.opts.audio?.playOne?.("pickup");
       this.redrawPower();
-    } else if (p.kind === "life") {
+    } else if (p.kind === "shield") {
+  this.shieldCharges = this.shieldMax;
+  this.setShield(true);
+  this.updateShieldHud();
+  this.opts.audio?.playOne?.("pickup"); // o un sfx específico si lo tenés
+}
+ 
+    
+    else if (p.kind === "life") {
       this.hp = Math.min(this.maxHP, this.hp + 25);
       this.redrawHP();
       this.opts.audio?.playOne?.("pickupLife");
@@ -1486,6 +1631,14 @@ private updateRacePositions() {
 
   /* ============================== Daño player ============================ */
   private hurtPlayer(dmg: number): boolean {
+    if (this.shieldCharges > 0) {
+  this.shieldCharges -= 1;
+  this.updateShieldHud();
+  this.opts.audio?.playOne?.("impact");
+  this.vibrate?.(15);
+  if (this.shieldCharges <= 0) this.setShield(false);
+  return true; // golpe “procesado” pero sin perder HP
+}
     if (this.invuln > 0 || this.ended || this.finished || this.godMode) return false; // ⬅️ nada de daño
     this.hp = Math.max(0, this.hp - dmg);
     this.invuln = this.invulnTime;
@@ -1514,6 +1667,9 @@ try { this.posTextR2.destroy(); } catch {}
     try { this.godHalo.destroy(); } catch {}
     try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
+    try { this.shieldText.destroy(); } catch {}
+try { this.shieldRing.destroy(); } catch {}
+
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
     this.opts.audio?.stopSfx?.("motor");
     this.ready = false;

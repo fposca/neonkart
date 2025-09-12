@@ -1,8 +1,14 @@
+/* eslint-disable no-empty */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/game/Level2.ts
 import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
 import { Input } from "./input";
 import type { AudioBus } from "./audio";
+import { getTuning } from "./difficulty";
+import { getSkin } from "./skins";
+
+
 
 /* ===== Tipos ===== */
 type Vec2 = { x: number; y: number };
@@ -29,12 +35,14 @@ type Rival = {
 };
 
 type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" | "shield" }; // ⬅️ añade "shield"
 
 type LevelOpts = {
   onGameOver?: () => void;
   onLevelComplete?: (place: 1 | 2 | 3) => void;
   audio?: AudioBus;
+  difficulty?: import("./difficulty").DifficultyId;
+  skin?: import("./skins").SkinId;                 // ⬅️ NUEVO
 };
 
 export class Level2 {
@@ -47,7 +55,8 @@ export class Level2 {
     this.app = app;
     this.input = input;
     this.opts = opts;
-
+ this.tuning = getTuning(opts.difficulty);
+  this.skinDef = getSkin(opts.skin);
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer, this.world, this.hud, this.overlay);
     this.world.sortableChildren = true;
@@ -55,6 +64,9 @@ export class Level2 {
     // FX Modo Dios
     this.godHalo.visible = false;
     this.godHalo.zIndex = 990;    // debajo del player (1000)
+    this.shieldRing.zIndex = 995;           // debajo del player (1000)
+this.shieldRing.visible = false;
+this.world.addChild(this.shieldRing);
     this.trailContainer.zIndex = 985;
     this.world.addChild(this.trailContainer, this.godHalo);
     this.godFireContainer.zIndex = 1002;
@@ -95,9 +107,9 @@ enemyScale  = 0.65; // runners/torretas
 
   /* ===== Track / vueltas ===== */
   camX = 0;
-  trackLength = 25000;
+  trackLength = 2500;
   lapFinishX = this.trackLength;
-  lapsTotal = 3;
+  lapsTotal = 1;
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -146,7 +158,33 @@ enemyScale  = 0.65; // runners/torretas
     const pad3 = (n: number) => n.toString().padStart(3, "0");
     return `${pad2(m)}:${pad2(s)}.${pad3(mil)}`;
   }
+  // ==== SKIN ====
+private skinDef!: ReturnType<typeof getSkin>;
 
+// ==== DRIFT / BOOST dedicada ====
+driftHold = 0;
+driftBoostTimer = 0;
+driftBoostDuration = 0.8;   // dura un poquito más
+driftBoostPower = 2160;     // “patada” de velocidad
+driftCooldown = 15;         // 15s para reutilizar
+driftCdTimer = 0;
+_prevDrift = false;
+
+// ==== SHIELD ====
+shieldCharges = 0;
+shieldMax = 5;
+shieldText = new PIXI.Text({
+  text: "",
+  style: { fill: 0x87e6ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+});
+shieldRing = new PIXI.Graphics();
+shieldPulseT = 0; // animación
+// timers de spawn del pickup shield
+shieldPickupTimer = 14; // primer intento ~14s
+shieldPickupMin   = 18;
+shieldPickupMax   = 26;
+
+private tuning!: ReturnType<typeof getTuning>;
   // Mini-mapa
   mapBg = new PIXI.Graphics();
   mapW = 560;
@@ -198,9 +236,15 @@ enemyScale  = 0.65; // runners/torretas
   /* ===== Enemigos ===== */
   enemies: Enemy[] = [];
   enemyTimer = 0;
-  enemyMin = 1.6;
-  enemyMax = 2.4;
+  baseEnemyMin = 2.5;
+baseEnemyMax = 4.5;
 
+get enemyMin() { return this.baseEnemyMin / this.tuning.enemyMultiplier; }
+get enemyMax() { return this.baseEnemyMax / this.tuning.enemyMultiplier; }
+ // ===== Escudo (armor) =====
+  shieldHits = 0;           // 0 = sin escudo
+  shieldMaxHits = 5;        // dura 5 golpes
+  shieldFlash = 0;          // para un pequeño flash al recibir golpe
   /* ===== Rivales ===== */
   rivals: Rival[] = [];
 
@@ -274,7 +318,10 @@ posFlameTime = 0;
   trailContainer = new PIXI.Container();
   godTrail: { sp: PIXI.Graphics; life: number; max: number }[] = [];
   godTrailTimer = 0;
-
+ private vibrate(ms: number) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    try { (navigator as any).vibrate?.(ms); } catch { }
+  }
   /* ===== Overlay fin/juego ===== */
   overlayTimer: number | null = null;
   ended = false;
@@ -295,6 +342,84 @@ posFlameTime = 0;
   lampGreen = new PIXI.Graphics();
 
   /* ============================ Helpers ============================ */
+  private layoutHudRow() {
+  const gap = 12;
+  this.shieldText.position.set(
+    this.ammoText.x + this.ammoText.width + gap,
+    this.ammoText.y
+  );
+}
+private updateShieldHud() {
+  if (this.shieldCharges > 0) {
+    this.shieldText.text = `Shield: ${this.shieldCharges}`;
+    this.shieldText.visible = true;
+  } else {
+    this.shieldText.text = "";
+    this.shieldText.visible = false;
+  }
+  this.layoutHudRow(); // <-- reubica como en L1
+}
+
+private updateAmmoHud() {
+  this.ammoText.text = this.hasDistortion ? `Ammo: ${this.ammo}` : "";
+  this.layoutHudRow(); // <-- mantiene shield pegado al ammo
+}
+  private drawShieldRing() {
+  const g = this.shieldRing;
+  g.clear();
+  // doble aro simple
+  g.circle(0, 0, 46).stroke({ width: 3, color: 0x66e0ff, alpha: 0.9 });
+  g.circle(0, 0, 52).stroke({ width: 2, color: 0x00d2ff, alpha: 0.5 });
+}
+  private setShield(on: boolean, charges = this.shieldMax) {
+  if (on) {
+    this.shieldCharges = charges;
+    this.drawShieldRing();
+    this.shieldRing.visible = true;
+  } else {
+    this.shieldCharges = 0;
+    this.shieldRing.visible = false;
+    this.shieldRing.clear();
+  }
+  this.updateShieldHud();
+}
+  private updateShieldFX(dt: number) {
+    if (this.shieldHits <= 0) {
+      this.shieldRing.visible = false;
+      return;
+    }
+    this.shieldRing.visible = true;
+    this.shieldRing.position.set(this.player.x, this.player.y - this.jumpOffset);
+
+    if (this.shieldFlash > 0) this.shieldFlash -= dt;
+
+    // redibuja el aro (simple y lindo)
+    const pulse = 0.75 + 0.25 * Math.sin((this.raceTime * 5) + (this.shieldFlash * 20));
+    this.shieldRing
+      .clear()
+      .circle(0, 0, 56).stroke({ width: 6, color: 0x66ccff, alpha: pulse })
+      .circle(0, 0, 62).stroke({ width: 2, color: 0x99ddff, alpha: 0.35 });
+  }
+
+  private spawnShieldPickup() {
+    if (this.controlsLocked) return;
+    const x = this.camX + this.W + 200;
+    const y = this.playerY - 40;
+
+    const sp = new PIXI.Sprite(this.tex.shield ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 815;
+
+    // fallback visual si no hay textura
+    if (!this.tex.shield) {
+      const g = new PIXI.Graphics().circle(0, 0, 10).fill(0x66ccff);
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "shield" });
+  }
+
   private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
 private edgeStickSec = 2.0;       // tiempo para activar penalización
 private edgePenaltyDur = 2.2;     // duración del empuje
@@ -356,7 +481,6 @@ private makeReggaetonDisc(size = 2.0): PIXI.Graphics {
 }
 
   private updateLapHud() { this.lapText.text = `VUELTA ${this.lap}/${this.lapsTotal}`; }
-  private updateAmmoHud() { this.ammoText.text = this.hasDistortion ? `Ammo: ${this.ammo}` : ""; }
 
   private colorForPlace(place: number): number {
   if (place === 1) return 0xffd24a; // dorado
@@ -370,6 +494,7 @@ private setupPositionLabels() {
   this.posTextR1.anchor.set(0.5, 1);
   this.posTextR2.anchor.set(0.5, 1);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (this.posTextP as any).zIndex = 2000;
   (this.posTextR1 as any).zIndex = 2000;
   (this.posTextR2 as any).zIndex = 2000;
@@ -464,6 +589,7 @@ private updateGodFire(dt: number) {
   }
   this.godFire = this.godFire.filter(p => {
     if (p.life > 0) return true;
+    // eslint-disable-next-line no-empty
     try { p.sp.destroy(); } catch {}
     return false;
   });
@@ -490,6 +616,7 @@ private updateGodFire(dt: number) {
     else if (lap === 2) t = this.finishTexLap2 ?? this.finishTexFallback;
     else t = this.finishTexFinal ?? this.finishTexFallback;
 
+    // eslint-disable-next-line no-empty
     if (this.finishSprite) { try { this.finishSprite.destroy({ children: true }); } catch {} }
 
     if (t) {
@@ -531,6 +658,13 @@ private updateGodFire(dt: number) {
     this.tex.kartHit   = await this.tryLoad(IMG.kartHit);
     this.tex.kartDead  = await this.tryLoad(IMG.kartDead);
     this.tex.kartShoot = await this.tryLoad(IMG.kartShoot);
+// === SKINS: override de las 4 poses ===
+const skin = this.skinDef;
+this.tex.kart      = await this.tryLoad(skin.kartSide)  ?? this.tex.kart;
+this.tex.kartHit   = await this.tryLoad(skin.kartHit)   ?? this.tex.kartHit;
+this.tex.kartDead  = await this.tryLoad(skin.kartDead)  ?? this.tex.kartDead;
+this.tex.kartShoot = await this.tryLoad(skin.kartShoot) ?? this.tex.kartShoot;
+
 
     // enemigos
     this.tex.enemy      = await this.tryLoad(IMG.regSide);
@@ -551,6 +685,8 @@ private updateGodFire(dt: number) {
     this.tex.pedal = await this.tryLoad(IMG.pedalDist);
     this.tex.life  = await this.tryLoad((IMG as any).life ?? "/assets/img/life.png");
     this.tex.god   = await this.tryLoad((IMG as any).god ?? "/assets/img/god.png");
+        this.tex.shield = await this.tryLoad((IMG as any).shield ?? "/assets/img/shield.png");
+
     this.godPickupsMax = Math.random() < 0.25 ? 2 : 1;
 
     /* Fondo 2x */
@@ -592,10 +728,13 @@ private updateGodFire(dt: number) {
     this.updateLapHud();
 
     this.levelTag.position.set(230, 64);
+    this.levelTag.text = `L2 • ${this.opts.difficulty ?? "normal"}`;
     this.hud.addChild(this.levelTag);
 
     this.ammoText.position.set(0, 40);
     this.hud.addChild(this.ammoText);
+this.hud.addChild(this.shieldText);
+this.updateShieldHud()
     this.updateAmmoHud();
 
     // anuncio de vuelta
@@ -750,7 +889,7 @@ this.setTrafficLights(true, false, false);
   const sx = from.pos.x,          sy = from.pos.y - 24;
   const dx = this.camX + this.player.x, dy = this.player.y - 10;
   const ang = Math.atan2(dy - sy, dx - sx);
-  const v = 430;
+const v = 430 * (0.9 + 0.4 * this.tuning.enemyMultiplier);
 
   // Vinilo para TODOS (turret y kart), con tamaño por tipo
   const size = from.kind === "turret" ? this.DISC_SCALE_TURRET : this.DISC_SCALE_KART;
@@ -840,7 +979,14 @@ this.setTrafficLights(true, false, false);
       this.hp = Math.min(this.maxHP, this.hp + 25);
       this.redrawHP();
       this.opts.audio?.playOne?.("pickupLife");
-    } else if (p.kind === "god") {
+    } 
+    else if (p.kind === "shield") {
+  this.shieldCharges = this.shieldMax;
+  this.setShield(true);
+  this.updateShieldHud();
+  this.opts.audio?.playOne?.("pickup"); // o un sfx específico si lo tenés
+}
+    else if (p.kind === "god") {
       this.setGod(true);
       this.godPickupsSpawned++;
       this.opts.audio?.playOne?.("pickupGod");
@@ -858,6 +1004,7 @@ if (on) {
   this.godFireTimer = 0;
 } else {
   this.godFireContainer.visible = false;
+  // eslint-disable-next-line no-empty
   for (const f of this.godFire) { try { f.sp.destroy(); } catch {} }
   this.godFire = [];
 }
@@ -962,6 +1109,7 @@ if (on) {
 
     // FREEZE COMBATE al terminar
     for (const e of this.enemies) e.shootCd = 9999;
+    // eslint-disable-next-line no-empty
     for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
 
     this.shots = [];
@@ -990,6 +1138,29 @@ if (on) {
 
   /* =============================== Update =============================== */
   update(dt: number) {
+    const drifting = !!this.input.a.drift && !this.controlsLocked;
+    
+if (drifting) {
+  this.driftHold += dt;
+} else if (this._prevDrift && !drifting) {
+  if (this.driftHold >= 0.8 && this.driftCdTimer <= 0) {
+    this.driftBoostTimer = this.driftBoostDuration;
+    this.driftCdTimer = this.driftCooldown;
+    this.showLapAnnounce?.("¡BOOST!");
+    this.opts.audio?.playOne?.("boost");
+    this.vibrate?.(40);
+  }
+  this.driftHold = 0;
+}
+this._prevDrift = drifting;
+
+if (this.driftBoostTimer > 0) this.driftBoostTimer -= dt;
+const cdBefore = this.driftCdTimer;
+if (this.driftCdTimer > 0) {
+  this.driftCdTimer = Math.max(0, this.driftCdTimer - dt);
+  if (cdBefore > 0 && this.driftCdTimer === 0) this.showLapAnnounce?.("Boost listo");
+}
+
     if (!this.ready) return;
     if (this.ended) return;
     if (this.finished) return; // congela todo tras cruzar la meta
@@ -1159,6 +1330,8 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
     // aplicar jugador
     this.player.x = this.playerX;
     this.player.y = this.playerY - this.jumpOffset;
+    this.updateShieldFX(dt);
+
 
     // actualizar trail (mover y desvanecer)
     if (this.godTrail.length) {
@@ -1172,6 +1345,7 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
       }
       this.godTrail = this.godTrail.filter(tp => {
         if (tp.life > 0) return true;
+        // eslint-disable-next-line no-empty
         try { tp.sp.destroy(); } catch {}
         return false;
       });
@@ -1208,7 +1382,9 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
       this.lapAnnounce.alpha = t / total;
       if (this.lapAnnounceTimer <= 0) this.lapAnnounce.visible = false;
     }
-
+ // velocidad jugador (x2 en godMode)
+    if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
+    else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
     /* ===== Rivales ===== */
     for (let i = 0; i < this.rivals.length; i++) {
       const r = this.rivals[i];
@@ -1228,7 +1404,7 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
       const godHandicap = this.godMode ? -120 : 0;
 
       const rivalMaxWhenYouBoost = this.maxSpeed - 15;
-      const rivalMaxWhenCruise   = this.maxSpeed + 35;
+const rivalMaxWhenCruise = this.maxSpeed + 35 + 40 * (this.tuning.enemyMultiplier - 1);
 
       const targetVBase = r.base + osc + catchup + godHandicap;
       const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
@@ -1336,6 +1512,13 @@ s.sp.rotation = Math.sin(s.pos.x * 0.02) * 0.25;
       this.godPickupTimer = this.godPickupMin + Math.random() * (this.godPickupMax - this.godPickupMin);
     }
 
+     // SHIELD pickup
+    this.shieldPickupTimer -= dt;
+    if (this.shieldPickupTimer <= 0) {
+      this.spawnShieldPickup();
+      this.shieldPickupTimer = this.shieldPickupMin + Math.random() * (this.shieldPickupMax - this.shieldPickupMin);
+    }
+
     for (const p of this.pickups) {
       p.pos.x -= this.baseSpeed * dt;
       p.sp.x = this.screenX(p.pos.x); p.sp.y = p.pos.y;
@@ -1362,6 +1545,15 @@ this.updatePositionFlames(dt);
 
   /* ===== daño ===== */
   private hurtPlayer(dmg: number): boolean {
+    // ⛨ ESCUDO absorbe el golpe
+if (this.shieldCharges > 0) {
+  this.shieldCharges -= 1;
+  this.updateShieldHud();
+  this.opts.audio?.playOne?.("impact");
+  this.vibrate?.(15);
+  if (this.shieldCharges <= 0) this.setShield(false);
+  return true; // golpe “procesado” pero sin perder HP
+}
     if (this.invuln > 0 || this.ended || this.finished || this.godMode) return false; // ⬅️ no aplicó daño
     this.hp = Math.max(0, this.hp - dmg);
     this.invuln = this.invulnTime;
@@ -1393,6 +1585,8 @@ try { this.godFireContainer.destroy({ children: true }); } catch {}
     try { this.godHalo.destroy(); } catch {}
     try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
+    try { this.shieldText.destroy(); } catch {}
+try { this.shieldRing.destroy(); } catch {}
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
     this.ready = false;
   }

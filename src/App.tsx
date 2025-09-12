@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { Game } from "./game/Game";
 import { AudioBus } from "./game/audio";
 import "./index.css";
+import { type DifficultyId } from "./game/difficulty";
+import { SKINS, type SkinId } from "./game/skins";
+import { hasPremium, loadEntitlements, grantPremium } from "./services/entitlements";
 
 type Mode = "menu" | "playing" | "over" | "controls";
 
@@ -10,6 +13,8 @@ type Mode = "menu" | "playing" | "over" | "controls";
 const isTouchDevice = () =>
   typeof window !== "undefined" &&
   ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
+
 
 const pressKey = (code: string, key?: string) =>
   window.dispatchEvent(new KeyboardEvent("keydown", { code, key: key ?? code, bubbles: true, cancelable: true }));
@@ -70,12 +75,19 @@ export default function App() {
     if (gameRef.current) { gameRef.current.destroy(); gameRef.current = null; }
     if (hostRef.current) hostRef.current.innerHTML = "";
   };
-
+const [volume, setVolume] = useState<number>(() =>
+  Number(localStorage.getItem("nbk:volume") ?? "0.8")
+);
   const startGame = async () => {
     audioRef.current.stopAll?.(); // cortar BGM de menú antes de entrar al juego
     destroyGame();                // crear juego NUEVO (empieza en Level 1)
     const root = hostRef.current!; root.innerHTML = "";
-    const game = new Game({ onGameOver: () => setMode("over"), audio: audioRef.current });
+    const game = new Game({
+  onGameOver: () => setMode("over"),
+  audio: audioRef.current,
+  difficulty,   // 👈 NUEVO
+  skin,         // 👈 NUEVO
+});
     gameRef.current = game;
 
     setIsLoading(true); setLoadPct(0);
@@ -109,8 +121,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    return () => { try { audioRef.current.stopAll?.(); } catch {} destroyGame(); };
+    return () => { try { audioRef.current.stopAll?.(); } catch { /* empty */ } destroyGame(); };
   }, []);
+useEffect(() => {
+  audioRef.current.setVolume?.(volume);
+}, []);
 
   useEffect(() => {
     const unlock = () => {
@@ -130,7 +145,14 @@ export default function App() {
     const fit = () => { const sw = window.innerWidth, sh = window.innerHeight; const scale = Math.min(sw / W, sh / H); root.style.width = `${W * scale}px`; root.style.height = `${H * scale}px`; };
     fit(); window.addEventListener("resize", fit); return () => window.removeEventListener("resize", fit);
   }, []);
-
+const onChangeVolume = (v: number) => {
+  setVolume(v);
+  localStorage.setItem("nbk:volume", String(v));
+  audioRef.current.setVolume?.(v);
+};
+const [difficulty, setDifficulty] = useState<DifficultyId>("normal");
+const [skin, setSkin] = useState<SkinId>("default");
+const [premium, setPremium] = useState<boolean>(loadEntitlements().premium);
   const controlsData = [
     { key: "→ (Flecha derecha)", action: "Acelera (y se mueve un poco a la derecha)" },
     { key: "← (Flecha izquierda)", action: "Mueve a la izquierda" },
@@ -156,6 +178,117 @@ export default function App() {
             >
               {isLoading ? "Cargando…" : "▶ Start"}
             </button>
+            {/* ======= Dificultad ======= */}
+<div style={{ marginTop: 12 }}>
+  <div style={{ fontWeight: 700, marginBottom: 8, color: "#fff" }}>Dificultad</div>
+  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+    <button
+      style={{ ...btn, ...(difficulty==="normal"?btnPrimary:{}), minWidth: 120 }}
+      onClick={() => setDifficulty("normal")}
+      disabled={isLoading}
+    >
+      Normal (Gratis)
+    </button>
+
+    <button
+      style={{ ...btn, ...(difficulty==="hard"?btnPrimary:{}), minWidth: 120, opacity: premium?1:0.6 }}
+      onClick={() => premium && setDifficulty("hard")}
+      disabled={isLoading || !premium}
+      title={premium ? "" : "Requiere Premium"}
+    >
+      Difícil {premium ? "" : "🔒"}
+    </button>
+
+    <button
+      style={{ ...btn, ...(difficulty==="extreme"?btnPrimary:{}), minWidth: 120, opacity: premium?1:0.6 }}
+      onClick={() => premium && setDifficulty("extreme")}
+      disabled={isLoading || !premium}
+      title={premium ? "" : "Requiere Premium"}
+    >
+      Extremo {premium ? "" : "🔒"}
+    </button>
+  </div>
+
+  {/* ⚠️ DEV ONLY: botón para simular Premium hasta integrarlo con pagos */}
+  {!premium && (
+    <div style={{ marginTop: 8 }}>
+      <button
+        style={{ ...btn, borderStyle: "dashed" }}
+        onClick={() => { grantPremium(); setPremium(true); }}
+      >
+        Simular Premium (dev)
+      </button>
+    </div>
+  )}
+</div>
+
+{/* ======= Skins ======= */}
+<div style={{ marginTop: 12 }}>
+  <div style={{ fontWeight: 700, marginBottom: 8, color: "#fff" }}>Skins</div>
+
+  {/* Preview del seleccionado */}
+  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+    {(() => {
+      const sel = SKINS.find(s => s.id === skin)!;
+      return (
+        <div style={{
+          width: 96, height: 96, borderRadius: 12, overflow: "hidden",
+          border: "1px solid rgba(255,255,255,0.2)", background: "rgba(0,0,0,.3)",
+          display: "grid", placeItems: "center"
+        }}>
+          <img src={sel.thumb} alt={sel.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        </div>
+      );
+    })()}
+    <div style={{ color: "#ddd" }}>
+      <div style={{ fontWeight: 800 }}>{SKINS.find(s => s.id === skin)?.title}</div>
+      <div style={{ opacity: .8, fontSize: 12 }}>Afecta solo al jugador (single-player)</div>
+    </div>
+  </div>
+
+  {/* Botones de selección con locking Premium */}
+  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+    {SKINS.map(s => {
+      const locked = s.id !== "default" && !premium;
+      return (
+        <button
+          key={s.id}
+          style={{
+            ...btn,
+            ...(skin===s.id?btnPrimary:{}),
+            minWidth: 110,
+            opacity: locked ? 0.6 : 1,
+            position: "relative",
+            paddingLeft: 12, paddingRight: 12,
+            display: "flex", alignItems: "center", gap: 8
+          }}
+          onClick={() => !locked && setSkin(s.id)}
+          disabled={isLoading || locked}
+          title={locked ? "Requiere Premium" : ""}
+        >
+          <img src={s.thumb} alt="" style={{ width: 28, height: 28, borderRadius: 6, objectFit: "cover" }} />
+          <span>{s.title}{locked ? " 🔒" : ""}</span>
+        </button>
+      );
+    })}
+  </div>
+</div>
+{/* ======= Volumen ======= */}
+<div style={{ marginTop: 12 }}>
+  <div style={{ fontWeight: 700, marginBottom: 8, color: "#fff" }}>
+    Volumen: {(volume*100)|0}%
+  </div>
+  <input
+    type="range"
+    min={0}
+    max={1}
+    step={0.01}
+    value={volume}
+    onChange={(e) => onChangeVolume(Number(e.target.value))}
+    style={{ width: "100%" }}
+  />
+</div>
+
             <button style={btn} onClick={() => setMode("controls")} disabled={isLoading}>🎮 Controles</button>
           </div>
         </div>
@@ -220,6 +353,13 @@ export default function App() {
           <TouchBtn label="▶" onDown={() => pressKey("ArrowRight")} onUp={() => releaseKey("ArrowRight")} style={{ left: 100 }} />
           <TouchBtn label="●" onDown={() => pressKey("KeyF", "f")}  onUp={() => releaseKey("KeyF", "f")} style={{ right: 96 }} />
           <TouchBtn label="⤒" onDown={() => pressKey("Space", " ")} onUp={() => releaseKey("Space", " ")} style={{ right: 16 }} />
+          <TouchBtn
+  label="↯"
+  onDown={() => pressKey("ShiftLeft")}
+  onUp={() => releaseKey("ShiftLeft")}
+  style={{ right: 176 }}  // ajustá la posición
+/>
+
           <TouchBtn
             label="Ⅱ"
             onDown={() => pressKey("KeyP", "p")}

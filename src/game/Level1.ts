@@ -1,12 +1,22 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable no-empty */
 // src/game/Level1.ts
 import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
 import { Input } from "./input";
 import type { AudioBus } from "./audio";
+import { getTuning } from "./difficulty";
+import { getSkin } from "./skins";
 
 /* =============================== Tipos =================================== */
 type Vec2 = { x: number; y: number };
-
+type LevelOpts = {
+  onGameOver?: () => void;
+  onLevelComplete?: (place: 1 | 2 | 3) => void;
+  audio?: AudioBus;
+  difficulty?: import("./difficulty").DifficultyId; // 👈
+  skin?: import("./skins").SkinId;                 // 👈
+};
 type Enemy = {
   sp: PIXI.Sprite;
   pos: Vec2;
@@ -24,13 +34,8 @@ type Enemy = {
 };
 
 type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" | "shield" };
 
-type LevelOpts = {
-  onGameOver?: () => void;
-  onLevelComplete?: (place: 1 | 2 | 3) => void;
-  audio?: AudioBus;
-};
 
 /* ============================== Clase ==================================== */
 export class Level1 {
@@ -54,13 +59,23 @@ export class Level1 {
   bg1 = new PIXI.Sprite();
   bg2 = new PIXI.Sprite();
   bgWidthScaled = 0;
+  //escudo 
+  shieldHP = 0;
+  shieldMax = 5;
+  shieldFx = new PIXI.Graphics();
+  shieldPulse = 0;
+  // Timers de spawn del pickup "shield"
+  shieldPickupTimer = 14;   // primer spawn ~14s
+  shieldPickupMin = 18;     // luego cada 18..
+  shieldPickupMax = 26;     // ..a 26s (aleatorio)
+  shieldAura = new PIXI.Graphics();
 
   // suelo
   ground!: PIXI.TilingSprite;
 
   // pista / metas
   camX = 0;
-  trackLength = 24000;               // longitud de UNA vuelta (distancia)
+  trackLength = 2400;               // longitud de UNA vuelta (distancia)
   lapFinishX = this.trackLength;    // worldX de meta de la vuelta actual
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
 
@@ -69,25 +84,35 @@ export class Level1 {
   finishTexLap2?: PIXI.Texture;
   finishTexFinal?: PIXI.Texture;
   finishTexFallback?: PIXI.Texture;
+hudShieldText = new PIXI.Text({
+  text: "",
+  style: { fill: 0x66e0ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+});
 
   // vueltas (MODO DISTANCIA)
-  lapsTotal = 3;
+  lapsTotal = 1;
   lap = 1;
   lapText = new PIXI.Text({
     text: "VUELTA 1/7",
     style: { fill: 0xfff090, fontSize: 18, fontFamily: "Arial", fontWeight: "900" },
   });
+  shieldCharges = 0;
 
+  // HUD
+  shieldText = new PIXI.Text({
+    text: "",
+    style: { fill: 0x66d9ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+  });
   // HUD: anuncio de vuelta centrado
   lapAnnounce = new PIXI.Text({
     text: "",
     style: { fill: 0xffcc00, fontSize: 72, fontFamily: "Arial", fontWeight: "900", align: "center" },
   });
   lapAnnounceTimer = 0; // segundos visibles (se maneja en update(dt))
-/* ===== Escalas (tamaño) ===== */
-playerScale = 0.65; // kart del jugador
-rivalScale  = 0.65; // Fredy/Doctor
-enemyScale  = 0.65; // runners/torretas
+  /* ===== Escalas (tamaño) ===== */
+  playerScale = 0.65; // kart del jugador
+  rivalScale = 0.65; // Fredy/Doctor
+  enemyScale = 0.65; // runners/torretas
 
   // jugador
   player = new PIXI.Sprite();
@@ -126,13 +151,22 @@ enemyScale  = 0.65; // runners/torretas
   finished = false;
   hitTimer = 0;
   shootPlayerTimer = 0;
-
+  levelTag = new PIXI.Text({
+    text: "L1",
+    style: { fill: 0xccccff, fontSize: 12, fontFamily: "Arial", fontWeight: "700" },
+  });
   // enemigos comunes
   enemies: Enemy[] = [];
   enemyTimer = 0;
-  enemyMin = 2.5;
-  enemyMax = 4.5;
-
+  baseEnemyMin = 2.5;
+  baseEnemyMax = 4.5;
+  get enemyMin() { return this.baseEnemyMin / Math.max(0.6, this.tuning.enemyMultiplier ** 0.5); }
+  get enemyMax() { return this.baseEnemyMax / Math.max(0.6, this.tuning.enemyMultiplier ** 0.5); }
+  // ===== Escudo (armor) =====
+  shieldHits = 0;           // 0 = sin escudo
+  shieldMaxHits = 5;        // dura 5 golpes
+  shieldRing = new PIXI.Graphics();
+  shieldFlash = 0;          // para un pequeño flash al recibir golpe
   // rivales de carrera
   rivals: Enemy[] = [];
 
@@ -204,9 +238,9 @@ enemyScale  = 0.65; // runners/torretas
 
   // ----- GOD MODE (estado + FX) -----
   // NUEVO NUMERO SEGUIMIENTO: flama del Modo Dios (partículas)
-godFireContainer = new PIXI.Container();
-godFire: { sp: PIXI.Graphics; life: number; max: number; }[] = [];
-godFireTimer = 0;
+  godFireContainer = new PIXI.Container();
+  godFire: { sp: PIXI.Graphics; life: number; max: number; }[] = [];
+  godFireTimer = 0;
 
   godMode = false;
   godTimer = 0;
@@ -228,10 +262,22 @@ godFireTimer = 0;
   // texturas
   tex: Record<string, PIXI.Texture | undefined> = {};
 
+  // timers drift
+  driftHold = 0;                   // cuánto llevás presionando la tecla drift
+  driftBoostTimer = 0;             // tiempo restante del boost activo
+  driftBoostDuration = 0.5;        // ⬅ dura 1.0s (antes 0.6)
+  driftBoostPower = 2160;           // ⬅ un toque más fuerte (antes 140)
+  driftHoldThreshold = 0.8;        // debés mantener 0.8s antes de soltar
+  driftCooldown = 5;              // ⬅ cooldown de 15s entre boosts
+  driftCdTimer = 0;                // tiempo restante de cooldown
+  _prevDrift = false;              // estado previo para detectar “soltada”
+
   constructor(app: PIXI.Application, input: Input, opts: LevelOpts = {}) {
     this.app = app;
     this.input = input;
     this.opts = opts;
+    this.tuning = getTuning(opts.difficulty);
+    this.skinDef = getSkin(opts.skin);
 
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer);
@@ -248,29 +294,74 @@ godFireTimer = 0;
     this.trailContainer.zIndex = 985;
     this.world.addChild(this.trailContainer, this.godHalo);
     this.godFireContainer.zIndex = 1002;   // encima del halo (990), debajo del player (1000)
-this.godFireContainer.visible = false;
-this.world.addChild(this.godFireContainer);
+    this.godFireContainer.visible = false;
+    this.world.addChild(this.godFireContainer);
   }
 
   /* ============================ Helpers ================================== */
   /* ===== Anti-cheese borde derecho ===== */
-private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
-private edgeStickSec = 2.0;       // tiempo para activar penalización
-private edgePenaltyDur = 2.2;     // duración del empuje
-private edgePenaltySpeed = 720;   // px/s de empuje hacia la izquierda
-private edgeStickTimer = 0;       // acumula tiempo “pegado + saltando”
-private edgePenaltyTimer = 0;     // penalización activa
+private updateShieldHud() {
+  if (this.shieldCharges > 0) {
+    this.shieldText.text = `Shield: ${this.shieldCharges}`;
+    this.shieldText.visible = true;
+    this.layoutHudRow();
+    
+  } else {
+    this.shieldText.text = "";
+    this.shieldText.visible = false;
+  }
+}
+private drawShieldRing() {
+  const g = this.shieldRing;
+  g.clear();
+  // doble aro simple
+  g.circle(0, 0, 46).stroke({ width: 3, color: 0x66e0ff, alpha: 0.9 });
+  g.circle(0, 0, 52).stroke({ width: 2, color: 0x00d2ff, alpha: 0.5 });
+}
 
+  private vibrate(ms: number) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    try { (navigator as any).vibrate?.(ms); } catch { }
+  }
+  private redrawShield() {
+    this.shieldFx.clear();
+    if (this.shieldHP <= 0) { this.shieldFx.visible = false; return; }
+    this.shieldFx.visible = true;
+
+    // aro celeste
+    const r = 46;
+    this.shieldFx.circle(0, 0, r).stroke({ width: 3, color: 0x33ccff, alpha: 0.9 });
+    this.shieldFx.circle(0, 0, r - 6).stroke({ width: 1.5, color: 0x99e6ff, alpha: 0.6 });
+  }
+
+  private triggerDriftBoost() {
+    if (this.driftCdTimer > 0) return;        // gate por cooldown
+
+    this.driftBoostTimer = this.driftBoostDuration;
+    this.driftCdTimer = this.driftCooldown;
+
+    this.showLapAnnounce?.("¡BOOST!");
+    this.opts.audio?.playOne?.("boost");
+    this.vibrate(40);                          // ⬅ importante el 'this.'
+  }
+  private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
+  private edgeStickSec = 2.0;       // tiempo para activar penalización
+  private edgePenaltyDur = 2.2;     // duración del empuje
+  private edgePenaltySpeed = 720;   // px/s de empuje hacia la izquierda
+  private edgeStickTimer = 0;       // acumula tiempo “pegado + saltando”
+  private edgePenaltyTimer = 0;     // penalización activa
+  private tuning!: ReturnType<typeof getTuning>;
+  private skinDef!: ReturnType<typeof getSkin>;
   private nextEnemyIn() { this.enemyTimer = this.enemyMin + Math.random() * (this.enemyMax - this.enemyMin); }
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private screenX(worldX: number) { return worldX - this.camX; }
   private clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
-private colorForPlace(place: number): number {
-  // 1º dorado, 2º plateado, 3º gris oscuro
-  if (place === 1) return 0xffd24a; // dorado
-  if (place === 2) return 0xc0c0c0; // plateado
-  return 0x7a7a7a;                  // gris oscuro
-}
+  private colorForPlace(place: number): number {
+    // 1º dorado, 2º plateado, 3º gris oscuro
+    if (place === 1) return 0xffd24a; // dorado
+    if (place === 2) return 0xc0c0c0; // plateado
+    return 0x7a7a7a;                  // gris oscuro
+  }
 
   private fmt(ms: number) {
     const m = Math.floor(ms / 60000);
@@ -280,26 +371,6 @@ private colorForPlace(place: number): number {
     const pad3 = (n: number) => n.toString().padStart(3, "0");
     return `${pad2(m)}:${pad2(s)}.${pad3(mil)}`;
   }
-  /* ===== Pickups (spawn pedal/distortion) ===== */
-// private spawnPickup() {
-//   if (this.controlsLocked) return;
-
-//   const x = this.camX + this.W + 200;
-//   const y = this.playerY - 40;
-
-//   const sp = new PIXI.Sprite(this.tex.pedal ?? PIXI.Texture.WHITE);
-//   sp.anchor.set(0.5);
-//   sp.zIndex = 800;
-
-//   // fallback si no hay textura
-//   if (!this.tex.pedal) {
-//     const g = new PIXI.Graphics().rect(-12, -8, 24, 16).fill(0x00d2ff);
-//     sp.texture = this.app.renderer.generateTexture(g);
-//   }
-
-//   this.world.addChild(sp);
-//   this.pickups.push({ sp, pos: { x, y }, kind: "distortion" });
-// }
 
 
   private redrawHP() {
@@ -313,26 +384,26 @@ private colorForPlace(place: number): number {
     const p = Math.max(0, this.distortTimer / this.distortDuration);
     this.powerBar.roundRect(0, 0, 260 * p, 4, 2).fill(0x00d2ff);
   }
-  private updateAmmoHud() { this.ammoText.text = this.hasDistortion ? `Ammo: ${this.ammo}` : ""; }
-    // NUEVO NUMERO SEGUIMIENTO: crear y agregar labels al world
+  private updateAmmoHud() { this.ammoText.text = this.hasDistortion ? `Ammo: ${this.ammo}` : ""; this.layoutHudRow(); }
+  // NUEVO NUMERO SEGUIMIENTO: crear y agregar labels al world
   // NUEVO NUMERO SEGUIMIENTO: crear y agregar labels + flamas al world
-private setupPositionLabels() {
-  this.posTextP.anchor.set(0.5, 1);
-  this.posTextR1.anchor.set(0.5, 1);
-  this.posTextR2.anchor.set(0.5, 1);
+  private setupPositionLabels() {
+    this.posTextP.anchor.set(0.5, 1);
+    this.posTextR1.anchor.set(0.5, 1);
+    this.posTextR2.anchor.set(0.5, 1);
 
-  (this.posTextP as any).zIndex = 2000;
-  (this.posTextR1 as any).zIndex = 2000;
-  (this.posTextR2 as any).zIndex = 2000;
+    (this.posTextP as any).zIndex = 2000;
+    (this.posTextR1 as any).zIndex = 2000;
+    (this.posTextR2 as any).zIndex = 2000;
 
-  (this.posFlameP as any).zIndex = 1995;
-  (this.posFlameR1 as any).zIndex = 1995;
-  (this.posFlameR2 as any).zIndex = 1995;
+    (this.posFlameP as any).zIndex = 1995;
+    (this.posFlameR1 as any).zIndex = 1995;
+    (this.posFlameR2 as any).zIndex = 1995;
 
-  // primero las flamas (debajo), luego los textos (encima)
-  this.world.addChild(this.posFlameP, this.posFlameR1, this.posFlameR2);
-  this.world.addChild(this.posTextP, this.posTextR1, this.posTextR2);
-}
+    // primero las flamas (debajo), luego los textos (encima)
+    this.world.addChild(this.posFlameP, this.posFlameR1, this.posFlameR2);
+    this.world.addChild(this.posTextP, this.posTextR1, this.posTextR2);
+  }
 
   private updateLapHud() { this.lapText.text = `VUELTA ${this.lap}/${this.lapsTotal}`; }
 
@@ -350,7 +421,7 @@ private setupPositionLabels() {
     else if (lap === 2) t = this.finishTexLap2 ?? this.finishTexFallback;
     else t = this.finishTexFinal ?? this.finishTexFallback;
 
-    if (this.finishSprite) { try { this.finishSprite.destroy({ children: true }); } catch {} }
+    if (this.finishSprite) { try { this.finishSprite.destroy({ children: true }); } catch { } }
 
     if (t) {
       const s = new PIXI.Sprite(t);
@@ -384,22 +455,26 @@ private setupPositionLabels() {
   /* =============================== Carga ================================= */
   async load() {
     // texturas base
-    this.tex.fondo     = await this.tryLoad(IMG.fondo);
-    this.tex.suelo     = await this.tryLoad(IMG.suelo);
-    this.tex.kart      = await this.tryLoad(IMG.kartSide);
-    this.tex.kartHit   = await this.tryLoad(IMG.kartHit);
-    this.tex.kartDead  = await this.tryLoad(IMG.kartDead);
+    this.tex.fondo = await this.tryLoad(IMG.fondo);
+    this.tex.suelo = await this.tryLoad(IMG.suelo);
+    this.tex.kart = await this.tryLoad(IMG.kartSide);
+    this.tex.kartHit = await this.tryLoad(IMG.kartHit);
+    this.tex.kartDead = await this.tryLoad(IMG.kartDead);
     this.tex.kartShoot = await this.tryLoad(IMG.kartShoot);
 
-    this.tex.enemy      = await this.tryLoad(IMG.regSide);
-    this.tex.enemyAtk   = await this.tryLoad(IMG.regShoot);
+    this.tex.enemy = await this.tryLoad(IMG.regSide);
+    this.tex.enemyAtk = await this.tryLoad(IMG.regShoot);
     this.tex.enemyWreck = await this.tryLoad(IMG.regWreck);
-
+    // FX escudo (debajo del jugador)
+    this.shieldFx.zIndex = 995;        // debajo del player (1000) pero arriba del suelo
+    this.shieldFx.visible = false;
+    this.world.addChild(this.shieldFx);
     // life
     this.tex.life = await this.tryLoad((IMG as any).life ?? "/assets/img/life.png");
 
     // GOD pickup
     this.tex.god = await this.tryLoad((IMG as any).god ?? "/assets/img/god.png");
+    this.tex.shield = await this.tryLoad((IMG as any).shield ?? "/assets/img/shield.png");
     // suerte: a veces puede aparecer un segundo
     this.godPickupsMax = Math.random() < 0.25 ? 2 : 1;
 
@@ -408,13 +483,25 @@ private setupPositionLabels() {
     this.tex.rival2 = await this.tryLoad((IMG as any).kartRival2) ?? (await this.tryLoad(IMG.regSide));
 
     // metas
-    this.finishTexLap1     = await this.tryLoad((IMG as any).finishLap1);
-    this.finishTexLap2     = await this.tryLoad((IMG as any).finishLap2);
-    this.finishTexFinal    = await this.tryLoad((IMG as any).finishFinal);
+    this.finishTexLap1 = await this.tryLoad((IMG as any).finishLap1);
+    this.finishTexLap2 = await this.tryLoad((IMG as any).finishLap2);
+    this.finishTexFinal = await this.tryLoad((IMG as any).finishFinal);
     this.finishTexFallback = await this.tryLoad((IMG as any).finish ?? (IMG as any).finishFinal);
 
     this.tex.pedal = await this.tryLoad(IMG.pedalDist);
 
+    // 2) === OVERRIDE por skin ANTES de crear el sprite del jugador ===
+    const skin = this.skinDef; // viene del constructor: this.skinDef = getSkin(opts.skin)
+    if (skin) {
+      const side = await this.tryLoad(skin.kartSide);
+      const hit = await this.tryLoad(skin.kartHit);
+      const dead = await this.tryLoad(skin.kartDead);
+      const shoot = await this.tryLoad(skin.kartShoot);
+      if (side) this.tex.kart = side;
+      if (hit) this.tex.kartHit = hit;
+      if (dead) this.tex.kartDead = dead;
+      if (shoot) this.tex.kartShoot = shoot;
+    }
     // fondo 2x
     if (this.tex.fondo) {
       const t = this.tex.fondo;
@@ -423,18 +510,23 @@ private setupPositionLabels() {
       this.bg1 = new PIXI.Sprite(t); this.bg1.scale.set(sx, sy); this.bg1.x = 0;
       this.bg2 = new PIXI.Sprite(t); this.bg2.scale.set(sx, sy); this.bg2.x = this.bgWidthScaled;
     } else {
-      const t = this.app.renderer.generateTexture(new PIXI.Graphics().rect(0,0,this.W,this.H).fill(0x1a1a1a));
+      const t = this.app.renderer.generateTexture(new PIXI.Graphics().rect(0, 0, this.W, this.H).fill(0x1a1a1a));
       this.bg1.texture = t; this.bg2.texture = t; this.bg2.x = this.W; this.bgWidthScaled = this.W;
     }
     this.bgLayer.addChild(this.bg1, this.bg2);
 
     // suelo
-    const gtex = this.tex.suelo ?? this.app.renderer.generateTexture(new PIXI.Graphics().rect(0,0,512,160).fill(0x222));
+    const gtex = this.tex.suelo ?? this.app.renderer.generateTexture(new PIXI.Graphics().rect(0, 0, 512, 160).fill(0x222));
     this.ground = new PIXI.TilingSprite({ texture: gtex, width: this.W, height: 160 });
     this.ground.y = this.H - this.ground.height;
     this.ground.zIndex = 100;
     this.world.addChild(this.ground);
-
+    this.player.texture = this.tex.kart ?? PIXI.Texture.WHITE;
+    this.player.anchor.set(0.5, 0.8);
+    this.player.position.set(this.playerX, this.playerY);
+    this.player.scale.set(this.playerScale);
+    this.player.zIndex = 1000;
+    this.world.addChild(this.player);
     // jugador
     this.player.texture = this.tex.kart ?? PIXI.Texture.WHITE;
     this.player.anchor.set(0.5, 0.8);
@@ -445,17 +537,40 @@ private setupPositionLabels() {
 
     // HUD (HP, poder, ammo, tiempo, vueltas)
     this.hud.position.set(20, 20);
-    this.hpBarBg.roundRect(0,0,260,18,9).fill(0x222).stroke({width:2,color:0x000});
+    this.hpBarBg.roundRect(0, 0, 260, 18, 9).fill(0x222).stroke({ width: 2, color: 0x000 });
     this.hud.addChild(this.hpBarBg, this.hpBarFg);
     this.powerBar.position.set(0, 22);
     this.hud.addChild(this.powerBar);
     this.ammoText.position.set(0, 40);
     this.hud.addChild(this.ammoText);
+    // ⬇️ NUEVO: texto de escudo debajo del ammo
+    this.shieldText.position.set(140, 40);
+    this.hud.addChild(this.shieldText);
+// HUD Shield
+this.hud.addChild(this.shieldText);
+this.updateShieldHud();
+
+// FX escudo (en el mundo, encima del piso pero debajo del player)
+this.shieldRing.zIndex = 995;
+this.shieldRing.visible = false;
+this.world.addChild(this.shieldRing);
+    this.updateShieldHud(); // para que arranque en "Shield: 0"
     this.timeText.position.set(200, 40);
     this.hud.addChild(this.timeText);
+    // 👉 NUEVO: HUD del escudo
+this.hudShieldText.position.set(0, 58);
+this.hud.addChild(this.hudShieldText);
+
+// (opcional si tenés una textura para el pickup)
+this.tex.shield = await this.tryLoad((IMG as any).shield ?? "/assets/img/shield.png");
     this.lapText.position.set(0, 64);
+    this.levelTag.position.set(230, 64);
+    this.hud.addChild(this.levelTag);
+    this.levelTag.text = `L1 • ${this.opts.difficulty ?? "normal"}`;
     this.hud.addChild(this.lapText);
-    this.redrawHP(); this.redrawPower(); this.updateAmmoHud(); this.updateLapHud();
+    this.redrawHP(); this.redrawPower(); this.updateAmmoHud(); this.updateLapHud(); this.layoutHudRow();
+
+
 
     // Mini-mapa (barra + pins + palito de meta)
     this.mapBg
@@ -489,8 +604,8 @@ private setupPositionLabels() {
     this.setFinishTextureForLap(1);
 
     // RIVALES: largan a la par
- 
-        this.spawnRivalsAtStart();
+
+    this.spawnRivalsAtStart();
 
     // NUEVO NUMERO SEGUIMIENTO: inicializar labels de posición
     this.setupPositionLabels();
@@ -537,7 +652,7 @@ private setupPositionLabels() {
     const panel = new PIXI.Graphics()
       .roundRect(0, 0, panelW, panelH, 24)
       .fill({ color: 0x000000, alpha: 0.4 })
-      // .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
+    // .stroke({ width: 6, color: 0x00d2ff, alignment: 1 });
 
     const cx = (this.W - panelW) / 2;
     const cy = (this.H - panelH) / 2 - 30;
@@ -568,7 +683,7 @@ private setupPositionLabels() {
     const mk = (t?: PIXI.Texture) => {
       const sp = new PIXI.Sprite(t ?? this.tex.enemy ?? PIXI.Texture.WHITE);
       sp.anchor.set(0.5, 0.8);
-      sp.scale.set(this.enemyScale); 
+      sp.scale.set(this.enemyScale);
       sp.zIndex = 700; // debajo del player, arriba de enemigos
       sp.scale.set(this.rivalScale); // 👈 NUEVO
       this.world.addChild(sp);
@@ -601,6 +716,13 @@ private setupPositionLabels() {
   }
 
   /* ============================ Spawns/FX ================================ */
+  private layoutHudRow() {
+  const gap = 12;
+  this.shieldText.position.set(
+    this.ammoText.x + this.ammoText.width + gap,
+    this.ammoText.y
+  );
+}
   private spawnEnemy() {
     if (this.controlsLocked) return;
     const margin = 240;
@@ -609,10 +731,10 @@ private setupPositionLabels() {
 
     const sp = new PIXI.Sprite(this.tex.enemy ?? PIXI.Texture.WHITE);
     sp.anchor.set(0.5, 0.8);
-    sp.scale.set(this.enemyScale); 
+    sp.scale.set(this.enemyScale);
     sp.zIndex = 750; // enemigos debajo de rivales y player
     if (!this.tex.enemy) {
-      const g = new PIXI.Graphics().rect(-24,-16,48,32).fill(0x27ae60);
+      const g = new PIXI.Graphics().rect(-24, -16, 48, 32).fill(0x27ae60);
       sp.texture = this.app.renderer.generateTexture(g);
     }
     this.world.addChild(sp);
@@ -620,116 +742,117 @@ private setupPositionLabels() {
     const rel = (Math.random() < 0.5 ? -1 : 1) * (40 + Math.random() * 80);
     const speed = this.baseSpeed + rel;
 
-    this.enemies.push({ sp, pos: { x, y }, speed, shootFlash: 0, hp: 3, dead: false });
+this.enemies.push({
+  sp, pos: { x, y }, speed, shootFlash: 0, hp: this.enemyHP(), dead: false
+});  }
+  private enemyShoot(from: Enemy) {
+    if (from.dead) return;
+
+    const sx = this.screenX(from.pos.x), sy = from.pos.y - 24;
+    const dx = this.player.x, dy = this.player.y - 10;
+    const ang = Math.atan2(dy - sy, dx - sx);
+    const v = 430;
+
+    // ¡Siempre vinilo en L1!
+    const gfx = this.makeReggaetonDisc();
+    gfx.scale.set(3);
+    const shot: Shot = {
+      sp: gfx,
+      pos: { x: from.pos.x, y: sy },
+      vx: Math.cos(ang) * v,
+      vy: Math.sin(ang) * v,
+    };
+
+    // que gire
+    (shot.sp as any).rotSpeed = Math.random() < 0.5 ? -8 : 8;
+
+    shot.sp.position.set(this.screenX(shot.pos.x), shot.pos.y);
+    shot.sp.zIndex = 900;
+    this.world.addChild(shot.sp);
+    this.shots.push(shot);
+
+    this.opts.audio?.playOne?.("enemyShoot");
+
+    if (!from.dead && this.tex.enemyAtk) {
+      from.sp.texture = this.tex.enemyAtk;
+      setTimeout(() => { if (!from.dead && this.tex.enemy) from.sp.texture = this.tex.enemy; }, 180);
+    }
   }
-private enemyShoot(from: Enemy) {
-  if (from.dead) return;
 
-  const sx = this.screenX(from.pos.x), sy = from.pos.y - 24;
-  const dx = this.player.x, dy = this.player.y - 10;
-  const ang = Math.atan2(dy - sy, dx - sx);
-  const v = 430;
 
-  // ¡Siempre vinilo en L1!
-  const gfx = this.makeReggaetonDisc();
-gfx.scale.set(3); 
-  const shot: Shot = {
-    sp: gfx,
-    pos: { x: from.pos.x, y: sy },
-    vx: Math.cos(ang) * v,
-    vy: Math.sin(ang) * v,
-  };
 
-  // que gire
-  (shot.sp as any).rotSpeed = Math.random() < 0.5 ? -8 : 8;
+  private setPlayerTextureHit() { if (this.tex.kartHit) this.player.texture = this.tex.kartHit; this.hitTimer = 0.18; }
+  private setPlayerTextureNormal() { if (this.tex.kart) this.player.texture = this.tex.kart; }
+  private setPlayerTextureDead() { if (this.tex.kartDead) this.player.texture = this.tex.kartDead; }
+  private setPlayerTextureShoot() { if (this.tex.kartShoot) { this.player.texture = this.tex.kartShoot; this.shootPlayerTimer = 0.12; } }
 
-  shot.sp.position.set(this.screenX(shot.pos.x), shot.pos.y);
-  shot.sp.zIndex = 900;
-  this.world.addChild(shot.sp);
-  this.shots.push(shot);
+  /* =================== Fin / Overlays con auto-hide 3s =================== */
+  private showResultOverlay(text: string) {
+    this.overlay.removeChildren();
 
-  this.opts.audio?.playOne?.("enemyShoot");
+    const panel = new PIXI.Graphics()
+      .roundRect(0, 0, 520, 200, 18)
+      .fill({ color: 0x000000, alpha: 0.5 });
+    panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
+    this.overlay.addChild(panel);
 
-  if (!from.dead && this.tex.enemyAtk) {
-    from.sp.texture = this.tex.enemyAtk;
-    setTimeout(() => { if (!from.dead && this.tex.enemy) from.sp.texture = this.tex.enemy; }, 180);
+    const title = new PIXI.Text({
+      text,
+      style: { fill: 0xffffff, fontSize: 64, fontFamily: "Arial", fontWeight: "900", align: "center" },
+    });
+    title.anchor.set(0.5);
+    title.position.set(this.W / 2, this.H / 2 - 16);
+    this.overlay.addChild(title);
+
+    const time = new PIXI.Text({
+      text: this.fmt(this.raceTime * 1000),
+      style: { fill: 0x00d2ff, fontSize: 20, fontFamily: "Arial", fontWeight: "700" },
+    });
+    time.anchor.set(0.5);
+
+    // 👇 aire dinámico debajo del título (sirve cuando es “1º”)
+    const EXTRA_GAP = 34; // ajustá a gusto (30–40 va bien)
+    const yDebajoDelTitulo = title.y + (title.height * 0.5) + EXTRA_GAP;
+    time.position.set(this.W / 2, yDebajoDelTitulo);
+
+    this.overlay.addChild(time);
+    this.overlay.visible = true;
   }
-}
-
-
-
-  private setPlayerTextureHit(){ if (this.tex.kartHit) this.player.texture = this.tex.kartHit; this.hitTimer = 0.18; }
-  private setPlayerTextureNormal(){ if (this.tex.kart) this.player.texture = this.tex.kart; }
-  private setPlayerTextureDead(){ if (this.tex.kartDead) this.player.texture = this.tex.kartDead; }
-  private setPlayerTextureShoot(){ if (this.tex.kartShoot) { this.player.texture = this.tex.kartShoot; this.shootPlayerTimer = 0.12; } }
-
- /* =================== Fin / Overlays con auto-hide 3s =================== */
-private showResultOverlay(text: string) {
-  this.overlay.removeChildren();
-
-  const panel = new PIXI.Graphics()
-    .roundRect(0, 0, 520, 200, 18)
-    .fill({ color: 0x000000, alpha: 0.5 });
-  panel.position.set((this.W - 520) / 2, (this.H - 200) / 2);
-  this.overlay.addChild(panel);
-
-  const title = new PIXI.Text({
-    text,
-    style: { fill: 0xffffff, fontSize: 64, fontFamily: "Arial", fontWeight: "900", align: "center" },
-  });
-  title.anchor.set(0.5);
-  title.position.set(this.W / 2, this.H / 2 - 16);
-  this.overlay.addChild(title);
-
-  const time = new PIXI.Text({
-    text: this.fmt(this.raceTime * 1000),
-    style: { fill: 0x00d2ff, fontSize: 20, fontFamily: "Arial", fontWeight: "700" },
-  });
-  time.anchor.set(0.5);
-
-  // 👇 aire dinámico debajo del título (sirve cuando es “1º”)
-  const EXTRA_GAP = 34; // ajustá a gusto (30–40 va bien)
-  const yDebajoDelTitulo = title.y + (title.height * 0.5) + EXTRA_GAP;
-  time.position.set(this.W / 2, yDebajoDelTitulo);
-
-  this.overlay.addChild(time);
-  this.overlay.visible = true;
-}
 
 
   private levelComplete(place: 1 | 2 | 3) {
-  if (this.finished) return;
-  this.finished = true;
+    if (this.finished) return;
+    this.finished = true;
 
-  // Congelar juego/combate
-  this.controlsLocked = true;
-  this.invuln = 9999;
-  this.shotCooldown = 9999;
-  this.enemyTimer = 9999;
-  this.pickupTimer = 9999;
-  this.lifePickupTimer = 9999;
-  this.godPickupTimer = 9999;
-  this.speed = 0;
+    // Congelar juego/combate
+    this.controlsLocked = true;
+    this.invuln = 9999;
+    this.shotCooldown = 9999;
+    this.enemyTimer = 9999;
+    this.pickupTimer = 9999;
+    this.lifePickupTimer = 9999;
+    this.godPickupTimer = 9999;
+    this.speed = 0;
 
-  // ⬇️ cortar audio que pueda quedar sonando
-  this.opts.audio?.stopSfx?.("motor");
-  // this.opts.audio?.stopBgm?.();
+    // ⬇️ cortar audio que pueda quedar sonando
+    this.opts.audio?.stopSfx?.("motor");
+    // this.opts.audio?.stopBgm?.();
 
-  // limpiar proyectiles
-  for (const s of this.shots) { try { s.sp.destroy(); } catch {} }
-  this.shots = [];
-  for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
-  this.playerShots = [];
+    // limpiar proyectiles
+    for (const s of this.shots) { try { s.sp.destroy(); } catch { } }
+    this.shots = [];
+    for (const s of this.playerShots) { try { s.sp.destroy(); } catch { } }
+    this.playerShots = [];
 
-  const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
-  this.showResultOverlay(label);
+    const label = place === 1 ? "¡1º!" : place === 2 ? "2º" : "3º";
+    this.showResultOverlay(label);
 
- if (this.overlayTimer) clearTimeout(this.overlayTimer);
-this.overlayTimer = window.setTimeout(() => {
-  this.overlay.visible = false;
-  this.opts.onLevelComplete?.(place);
-}, 3000); // 3s (>= 2s) para que el cartel quede visible
-}
+    if (this.overlayTimer) clearTimeout(this.overlayTimer);
+    this.overlayTimer = window.setTimeout(() => {
+      this.overlay.visible = false;
+      this.opts.onLevelComplete?.(place);
+    }, 3000); // 3s (>= 2s) para que el cartel quede visible
+  }
 
 
   private endGame() {
@@ -744,20 +867,35 @@ this.overlayTimer = window.setTimeout(() => {
     }, 3000);
   }
 
-  // ✅ gatea daño por invuln y por godMode
   private hurtPlayer(dmg: number): boolean {
-    if (this.invuln > 0 || this.ended || this.godMode) return false;
-    this.hp = Math.max(0, this.hp - dmg);
+    if (this.invuln > 0 || this.ended || this.finished || this.godMode) return false;
+
+    // ⬇️ ESCUDO absorbe el golpe
+  if (this.shieldCharges > 0) {
+  this.shieldCharges -= 1;
+  this.updateShieldHud();
+  this.opts.audio?.playOne?.("impact");
+  this.vibrate(15);
+  if (this.shieldCharges <= 0) this.setShield(false); // apaga aro/FX
+  return true; // golpe procesado, sin perder vida
+}
+
+    // (resto de tu daño normal)
+    const realDmg = Math.round(dmg * (0.8 + 0.4 * this.tuning.enemyMultiplier));
+    this.hp = Math.max(0, this.hp - realDmg);
     this.invuln = this.invulnTime;
     this.redrawHP();
     this.setPlayerTextureHit();
     this.opts.audio?.playOne?.("playerHit");
+    this.vibrate(20);
     if (this.hp <= 0) this.endGame();
     return true;
   }
 
+
+
   /* ============================== Pickups ================================ */
-  private spawnPickup(){
+  private spawnPickup() {
     if (this.controlsLocked) return;
     const x = this.camX + this.W + 200;
     const y = this.playerY - 40;
@@ -765,14 +903,14 @@ this.overlayTimer = window.setTimeout(() => {
     sp.anchor.set(0.5);
     sp.zIndex = 800;
     if (!this.tex.pedal) {
-      const g = new PIXI.Graphics().rect(-12,-8,24,16).fill(0x00d2ff);
+      const g = new PIXI.Graphics().rect(-12, -8, 24, 16).fill(0x00d2ff);
       sp.texture = this.app.renderer.generateTexture(g);
     }
     this.world.addChild(sp);
     this.pickups.push({ sp, pos: { x, y }, kind: "distortion" });
   }
 
-  private spawnLifePickup(){
+  private spawnLifePickup() {
     if (this.controlsLocked) return;
     const x = this.camX + this.W + 200;
     const y = this.playerY - 40;
@@ -780,14 +918,14 @@ this.overlayTimer = window.setTimeout(() => {
     sp.anchor.set(0.5);
     sp.zIndex = 800;
     if (!this.tex.life) {
-      const g = new PIXI.Graphics().circle(0,0,10).fill(0x33dd33);
+      const g = new PIXI.Graphics().circle(0, 0, 10).fill(0x33dd33);
       sp.texture = this.app.renderer.generateTexture(g);
     }
     this.world.addChild(sp);
     this.pickups.push({ sp, pos: { x, y }, kind: "life" });
   }
 
-  private spawnGodPickup(){
+  private spawnGodPickup() {
     if (this.controlsLocked || this.godPickupsSpawned >= this.godPickupsMax) return;
     const x = this.camX + this.W + 220;
     const y = this.playerY - 60;
@@ -795,14 +933,14 @@ this.overlayTimer = window.setTimeout(() => {
     sp.anchor.set(0.5);
     sp.zIndex = 820;
     if (!this.tex.god) {
-      const g = new PIXI.Graphics().circle(0,0,12).fill(0xffee66).stroke({width:2,color:0xaa9900});
+      const g = new PIXI.Graphics().circle(0, 0, 12).fill(0xffee66).stroke({ width: 2, color: 0xaa9900 });
       sp.texture = this.app.renderer.generateTexture(g);
     }
     this.world.addChild(sp);
     this.pickups.push({ sp, pos: { x, y }, kind: "god" });
   }
 
-  private givePickup(p: Pickup){
+  private givePickup(p: Pickup) {
     if (p.kind === "distortion") {
       this.hasDistortion = true;
       this.distortTimer = this.distortDuration;
@@ -810,7 +948,15 @@ this.overlayTimer = window.setTimeout(() => {
       this.updateAmmoHud();
       this.opts.audio?.playOne?.("pickup");
       this.redrawPower();
-    } else if (p.kind === "life") {
+    } else if (p.kind === "shield") {
+      this.shieldCharges = 5;          // dura 5 golpes
+      this.updateShieldHud();          // <-- refrescar
+      this.setShield(true);            // tu FX/aro activo si lo tenés
+      this.showLapAnnounce?.("¡ESCUDO!");
+      this.opts.audio?.playOne?.("pickup"); // o "pickupShield" si tenés
+    }
+
+    else if (p.kind === "life") {
       this.hp = Math.min(this.maxHP, this.hp + 25);
       this.redrawHP();
       this.opts.audio?.playOne?.("pickupLife");
@@ -819,20 +965,21 @@ this.overlayTimer = window.setTimeout(() => {
       this.godPickupsSpawned++; // cuenta esta toma
       this.opts.audio?.playOne?.("pickupGod"); // SFX dedicado
     }
+
   }
 
   private setGod(on: boolean) {
     this.godMode = on;
     if (on) {
-  // NUEVO NUMERO SEGUIMIENTO: activar flama God
-  this.godFireContainer.visible = true;
-  this.godFireTimer = 0;
-} else {
-  // NUEVO NUMERO SEGUIMIENTO: desactivar flama God + limpiar
-  this.godFireContainer.visible = false;
-  for (const f of this.godFire) { try { f.sp.destroy(); } catch {} }
-  this.godFire = [];
-}
+      // NUEVO NUMERO SEGUIMIENTO: activar flama God
+      this.godFireContainer.visible = true;
+      this.godFireTimer = 0;
+    } else {
+      // NUEVO NUMERO SEGUIMIENTO: desactivar flama God + limpiar
+      this.godFireContainer.visible = false;
+      for (const f of this.godFire) { try { f.sp.destroy(); } catch { } }
+      this.godFire = [];
+    }
     if (on) {
       this.godTimer = this.godDuration;
       (this.player as any).tint = 0xffee66;
@@ -845,67 +992,122 @@ this.overlayTimer = window.setTimeout(() => {
 
       // cartelito
       this.showLapAnnounce("¡MODO DIOS!");
-      
+
     } else {
       (this.player as any).tint = 0xffffff;
       this.godHalo.visible = false;
-      
+
     }
   }
-
-  private drawGodHalo(){
+private enemyHP(): number {
+  // normal → 2 | hard → 3 | extreme → 4 (ajustá si querés)
+  const m = this.tuning.enemyMultiplier;   // ~1 (normal), >1 hard/extreme
+  if (m < 1.1) return 2;
+  if (m < 1.35) return 3;
+  return 4;
+}
+  private drawGodHalo() {
     this.godHalo.clear();
     // halo doble elíptico detrás del kart
     this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 70, 36).fill({ color: 0xffd200, alpha: 0.22 });
     this.godHalo.ellipse(0, this.playerY - this.jumpOffset - 18, 44, 18).fill({ color: 0xffffaa, alpha: 0.18 });
     this.godHalo.zIndex = 990;
   }
+  private setShield(on: boolean, charges = this.shieldMax) {
+  if (on) {
+    this.shieldCharges = charges;
+    this.drawShieldRing();
+    this.shieldRing.visible = true;
+  } else {
+    this.shieldCharges = 0;
+    this.shieldRing.visible = false;
+    this.shieldRing.clear();
+  }
+  this.updateShieldHud();
+}
+  private updateShieldFX(dt: number) {
+    if (this.shieldHits <= 0) {
+      this.shieldRing.visible = false;
+      return;
+    }
+    this.shieldRing.visible = true;
+    this.shieldRing.position.set(this.player.x, this.player.y - this.jumpOffset);
+
+    if (this.shieldFlash > 0) this.shieldFlash -= dt;
+
+    // redibuja el aro (simple y lindo)
+    const pulse = 0.75 + 0.25 * Math.sin((this.raceTime * 5) + (this.shieldFlash * 20));
+    this.shieldRing
+      .clear()
+      .circle(0, 0, 56).stroke({ width: 6, color: 0x66ccff, alpha: pulse })
+      .circle(0, 0, 62).stroke({ width: 2, color: 0x99ddff, alpha: 0.35 });
+  }
+
+  private spawnShieldPickup() {
+    if (this.controlsLocked) return;
+    const x = this.camX + this.W + 200;
+    const y = this.playerY - 40;
+
+    const sp = new PIXI.Sprite(this.tex.shield ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 815;
+
+    // fallback visual si no hay textura
+    if (!this.tex.shield) {
+      const g = new PIXI.Graphics().circle(0, 0, 10).fill(0x66ccff);
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "shield" });
+  }
+
   // Nota musical “sol”/corchea simple en dorado
-private makeNoteShot(): PIXI.Graphics {
-  const col = 0xff00ff;         // dorado
-  const edge = 0xff00ff;        // borde sutil
+  private makeNoteShot(): PIXI.Graphics {
+    const col = 0xff00ff;         // dorado
+    const edge = 0xff00ff;        // borde sutil
 
-  const g = new PIXI.Graphics();
+    const g = new PIXI.Graphics();
 
-  // Cabeza de la nota
-  g.circle(0, 0, 8).fill(col).stroke({ width: 2, color: edge, alignment: 1 });
+    // Cabeza de la nota
+    g.circle(0, 0, 8).fill(col).stroke({ width: 2, color: edge, alignment: 1 });
 
-  // Plica (palito)
-  g.roundRect(6, -26, 4, 26, 2).fill(col);
+    // Plica (palito)
+    g.roundRect(6, -26, 4, 26, 2).fill(col);
 
-  // Banderín (rectangulito redondeado a la derecha)
-  const flag = new PIXI.Graphics().roundRect(10, -26, 18, 10, 4).fill(col);
-  flag.alpha = 0.95;
-  g.addChild(flag);
+    // Banderín (rectangulito redondeado a la derecha)
+    const flag = new PIXI.Graphics().roundRect(10, -26, 18, 10, 4).fill(col);
+    flag.alpha = 0.95;
+    g.addChild(flag);
 
-  // (opcional) toque de inclinación inicial
-  g.rotation = -0.12;
+    // (opcional) toque de inclinación inicial
+    g.rotation = -0.12;
 
-  return g;
-}
+    return g;
+  }
 
-// 🎧 Disparo reggaetonero: "vinilo" girando
-private makeReggaetonDisc(): PIXI.Graphics {
-  const g = new PIXI.Graphics();
+  // 🎧 Disparo reggaetonero: "vinilo" girando
+  private makeReggaetonDisc(): PIXI.Graphics {
+    const g = new PIXI.Graphics();
 
-  // glow suave alrededor
-  const glow = new PIXI.Graphics().circle(0, 0, 16).fill({ color: 0xff33aa, alpha: 0.22 });
-  g.addChild(glow);
+    // glow suave alrededor
+    const glow = new PIXI.Graphics().circle(0, 0, 16).fill({ color: 0xff33aa, alpha: 0.22 });
+    g.addChild(glow);
 
-  // disco base
-  g.circle(0, 0, 12).fill(0x111111).stroke({ width: 2, color: 0xffffff, alignment: 1, alpha: 0.6 });
+    // disco base
+    g.circle(0, 0, 12).fill(0x111111).stroke({ width: 2, color: 0xffffff, alignment: 1, alpha: 0.6 });
 
-  // “surcos” del vinilo
-  g.circle(0, 0, 9).stroke({ width: 1, color: 0xffffff, alpha: 0.25 });
-  g.circle(0, 0, 6).stroke({ width: 1, color: 0xffffff, alpha: 0.2 });
+    // “surcos” del vinilo
+    g.circle(0, 0, 9).stroke({ width: 1, color: 0xffffff, alpha: 0.25 });
+    g.circle(0, 0, 6).stroke({ width: 1, color: 0xffffff, alpha: 0.2 });
 
-  // etiqueta del centro (neón)
-  g.circle(0, 0, 4).fill(0xff33aa);
+    // etiqueta del centro (neón)
+    g.circle(0, 0, 4).fill(0xff33aa);
 
-  return g;
-}
+    return g;
+  }
 
-  private emitGodTrail(){
+  private emitGodTrail() {
     // dos nubecitas por tick
     for (let i = 0; i < 2; i++) {
       const g = new PIXI.Graphics().roundRect(-10, -4, 20, 8, 4).fill(0xfff4b0);
@@ -918,51 +1120,51 @@ private makeReggaetonDisc(): PIXI.Graphics {
       this.godTrail.push({ sp: g, life: 0.5, max: 0.5 });
     }
   }
-// NUEVO NUMERO SEGUIMIENTO: emitir flama del Modo Dios
-private emitGodFire() {
-  // 2-3 llamas por tick
-  const count = 2 + (Math.random() * 2) | 0;
-  for (let i = 0; i < count; i++) {
-    const g = new PIXI.Graphics();
-    const col = Math.random() < 0.5 ? 0xff6a00 : 0xffd200; // naranja/amarillo
-    const rw = 8 + Math.random() * 6;
-    const rh = 12 + Math.random() * 8;
+  // NUEVO NUMERO SEGUIMIENTO: emitir flama del Modo Dios
+  private emitGodFire() {
+    // 2-3 llamas por tick
+    const count = 2 + (Math.random() * 2) | 0;
+    for (let i = 0; i < count; i++) {
+      const g = new PIXI.Graphics();
+      const col = Math.random() < 0.5 ? 0xff6a00 : 0xffd200; // naranja/amarillo
+      const rw = 8 + Math.random() * 6;
+      const rh = 12 + Math.random() * 8;
 
-    g.ellipse(0, 0, rw, rh).fill(col);
-    g.alpha = 0.9;
+      g.ellipse(0, 0, rw, rh).fill(col);
+      g.alpha = 0.9;
 
-    // detrás del kart, con un poquito de aleatorio
-    const px = this.player.x - 28 + (Math.random() * 12 - 6);
-    const py = this.player.y - this.jumpOffset + 4 + (Math.random() * 10 - 5);
-    g.position.set(px, py);
+      // detrás del kart, con un poquito de aleatorio
+      const px = this.player.x - 28 + (Math.random() * 12 - 6);
+      const py = this.player.y - this.jumpOffset + 4 + (Math.random() * 10 - 5);
+      g.position.set(px, py);
 
-    this.godFireContainer.addChild(g);
-    const life = 0.35 + Math.random() * 0.25;
-    this.godFire.push({ sp: g, life, max: life });
+      this.godFireContainer.addChild(g);
+      const life = 0.35 + Math.random() * 0.25;
+      this.godFire.push({ sp: g, life, max: life });
+    }
   }
-}
 
-// NUEVO NUMERO SEGUIMIENTO: update de la flama God
-private updateGodFire(dt: number) {
-  if (!this.godFire.length) return;
-  for (const p of this.godFire) {
-    // subir y moverse hacia la izquierda (viento)
-    p.sp.y -= 50 * dt;
-    p.sp.x -= 120 * dt;
-    p.life -= dt;
+  // NUEVO NUMERO SEGUIMIENTO: update de la flama God
+  private updateGodFire(dt: number) {
+    if (!this.godFire.length) return;
+    for (const p of this.godFire) {
+      // subir y moverse hacia la izquierda (viento)
+      p.sp.y -= 50 * dt;
+      p.sp.x -= 120 * dt;
+      p.life -= dt;
 
-    const a = Math.max(0, p.life / p.max);
-    p.sp.alpha = a;
-    p.sp.scale.set(1 + (1 - a) * 0.4);
+      const a = Math.max(0, p.life / p.max);
+      p.sp.alpha = a;
+      p.sp.scale.set(1 + (1 - a) * 0.4);
+    }
+    this.godFire = this.godFire.filter(p => {
+      if (p.life > 0) return true;
+      try { p.sp.destroy(); } catch { }
+      return false;
+    });
   }
-  this.godFire = this.godFire.filter(p => {
-    if (p.life > 0) return true;
-    try { p.sp.destroy(); } catch {}
-    return false;
-  });
-}
 
-  private playerFire(){
+  private playerFire() {
     if (!this.hasDistortion || this.playerShotCd > 0) return;
     if (this.ammo <= 0) return;
 
@@ -971,8 +1173,8 @@ private updateGodFire(dt: number) {
     const speed = 900;
 
     // AHORA (nota musical)
-const gfx = this.makeNoteShot();
-const shot: Shot = { sp: gfx, pos: { x: this.camX + sx, y: sy }, vx: speed, vy: 0 };
+    const gfx = this.makeNoteShot();
+    const shot: Shot = { sp: gfx, pos: { x: this.camX + sx, y: sy }, vx: speed, vy: 0 };
 
     shot.sp.position.set(sx, sy);
     shot.sp.zIndex = 800; // por encima de rivales/enemigos
@@ -980,13 +1182,14 @@ const shot: Shot = { sp: gfx, pos: { x: this.camX + sx, y: sy }, vx: speed, vy: 
     this.playerShots.push(shot);
     this.playerShotCd = this.playerShotCdMax;
     this.opts.audio?.playOne?.("playerShoot");
-
+    this.vibrate(20);
     // gastar bala
     this.ammo--; this.updateAmmoHud();
     if (this.ammo <= 0) { this.hasDistortion = false; this.redrawPower(); }
 
     // sprite shooting
     this.setPlayerTextureShoot();
+
   }
 
   /* ===== Mini-mapa: actualizar pins y palito de meta ===== */
@@ -995,11 +1198,11 @@ const shot: Shot = { sp: gfx, pos: { x: this.camX + sx, y: sy }, vx: speed, vy: 
     const r1x = this.rivals[0]?.pos.x ?? playerWorld;
     const r2x = this.rivals[1]?.pos.x ?? playerWorld;
 
-    const progP  = this.lapProgressFor(playerWorld);
+    const progP = this.lapProgressFor(playerWorld);
     const progR1 = this.lapProgressFor(r1x);
     const progR2 = this.lapProgressFor(r2x);
 
-    const px = this.mapX + progP  * this.mapW;
+    const px = this.mapX + progP * this.mapW;
     const r1 = this.mapX + progR1 * this.mapW;
     const r2 = this.mapX + progR2 * this.mapW;
 
@@ -1010,80 +1213,80 @@ const shot: Shot = { sp: gfx, pos: { x: this.camX + sx, y: sy }, vx: speed, vy: 
     // Palito de meta: en modo por vuelta queda al final de la barra
     this.mapLapTick.position.set(this.mapX + this.mapW, this.mapY);
   }
-// NUEVO NUMERO SEGUIMIENTO: labels “1/2/3” sobre cada kart (más grande)
-// Labels grandes (x3) con sombra
-posTextP = new PIXI.Text({
-  text: "1",
-  style: {
-    fill: 0xffffff,
-    fontSize: 96,              // triple
-    fontFamily: "Arial",
-    fontWeight: "900",
-    dropShadow: true,
-  },
-});
-posTextR1 = new PIXI.Text({
-  text: "2",
-  style: {
-    fill: 0xffffff,
-    fontSize: 96,
-    fontFamily: "Arial",
-    fontWeight: "900",
-    dropShadow: true,
-  
-  },
-});
-posTextR2 = new PIXI.Text({
-  text: "3",
-  style: {
-    fill: 0xffffff,
-    fontSize: 96,
-    fontFamily: "Arial",
-    fontWeight: "900",
-    dropShadow: true,
-   
-  },
-});
+  // NUEVO NUMERO SEGUIMIENTO: labels “1/2/3” sobre cada kart (más grande)
+  // Labels grandes (x3) con sombra
+  posTextP = new PIXI.Text({
+    text: "1",
+    style: {
+      fill: 0xffffff,
+      fontSize: 96,              // triple
+      fontFamily: "Arial",
+      fontWeight: "900",
+      dropShadow: true,
+    },
+  });
+  posTextR1 = new PIXI.Text({
+    text: "2",
+    style: {
+      fill: 0xffffff,
+      fontSize: 96,
+      fontFamily: "Arial",
+      fontWeight: "900",
+      dropShadow: true,
 
-// NUEVO NUMERO SEGUIMIENTO: flamas detrás de cada numerito
-posFlameP = new PIXI.Graphics();
-posFlameR1 = new PIXI.Graphics();
-posFlameR2 = new PIXI.Graphics();
-posFlameTime = 0;
+    },
+  });
+  posTextR2 = new PIXI.Text({
+    text: "3",
+    style: {
+      fill: 0xffffff,
+      fontSize: 96,
+      fontFamily: "Arial",
+      fontWeight: "900",
+      dropShadow: true,
+
+    },
+  });
+
+  // NUEVO NUMERO SEGUIMIENTO: flamas detrás de cada numerito
+  posFlameP = new PIXI.Graphics();
+  posFlameR1 = new PIXI.Graphics();
+  posFlameR2 = new PIXI.Graphics();
+  posFlameTime = 0;
 
 
-// NUEVO NUMERO SEGUIMIENTO: actualiza y anima las flamas de los labels
+  // NUEVO NUMERO SEGUIMIENTO: actualiza y anima las flamas de los labels
 
 
 
 
   // NUEVO NUMERO SEGUIMIENTO: ordenar por worldX y ubicar labels 1/2/3 + flamas
-// NUEVO NUMERO SEGUIMIENTO: ordenar por worldX y ubicar labels 1/2/3 + flamas arriba de la cabeza
-private updateRacePositions() {
-  const playerWX = this.camX + this.player.x;
-  const r1WX = this.rivals[0]?.pos.x ?? -Infinity;
-  const r2WX = this.rivals[1]?.pos.x ?? -Infinity;
+  // NUEVO NUMERO SEGUIMIENTO: ordenar por worldX y ubicar labels 1/2/3 + flamas arriba de la cabeza
+  private updateRacePositions() {
+    const playerWX = this.camX + this.player.x;
+    const r1WX = this.rivals[0]?.pos.x ?? -Infinity;
+    const r2WX = this.rivals[1]?.pos.x ?? -Infinity;
 
-  const rows = [
-    { sp: this.player,        wx: playerWX, label: this.posTextP },
-    { sp: this.rivals[0]?.sp, wx: r1WX,     label: this.posTextR1 },
-    { sp: this.rivals[1]?.sp, wx: r2WX,     label: this.posTextR2 },
-  ].filter(r => r.sp);
+    const rows = [
+      { sp: this.player, wx: playerWX, label: this.posTextP },
+      { sp: this.rivals[0]?.sp, wx: r1WX, label: this.posTextR1 },
+      { sp: this.rivals[1]?.sp, wx: r2WX, label: this.posTextR2 },
+    ].filter(r => r.sp);
 
-  rows.sort((a, b) => b.wx - a.wx); // más adelante = 1º
+    rows.sort((a, b) => b.wx - a.wx); // más adelante = 1º
 
-  const OFFSET_UP = -38;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const sp = r.sp as PIXI.Sprite;
-    const yTop = sp.y - sp.height * (sp.anchor?.y ?? 0.5);
+    const OFFSET_UP = -38;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const sp = r.sp as PIXI.Sprite;
+      const yTop = sp.y - sp.height * (sp.anchor?.y ?? 0.5);
 
-    r.label.text = String(i + 1);
-    (r.label.style as any).fill = this.colorForPlace(i + 1);
-    r.label.x = sp.x;
-    r.label.y = yTop - OFFSET_UP;
+      r.label.text = String(i + 1);
+      (r.label.style as any).fill = this.colorForPlace(i + 1);
+      r.label.x = sp.x;
+      r.label.y = yTop - OFFSET_UP;
+    }
   }
-}
 
 
 
@@ -1091,56 +1294,82 @@ private updateRacePositions() {
 
   /* =============================== Update ================================ */
   update(dt: number) {
-  
-  // COUNTDOWN
-if (this.controlsLocked && !this.finished && !this.ended) {
-  this.countdownTimer -= dt;
-  if (this.countdownTimer <= 0) {
-    if (this.countdown === 3) {
-      // Pasa a "2" → se enciende AMARILLO (rojo ya venía de setup)
-      this.countdown = 2;
-      this.countdownText.text = "2";
-      this.countdownTimer = 1.0;
-      this.setTrafficLights(true, true, false);   // rojo + amarillo
-      this.opts.audio?.playOne?.("countBeep");
-    } else if (this.countdown === 2) {
-      // Pasa a "1" → se enciende VERDE (quedan las 3 encendidas)
-      this.countdown = 1;
-      this.countdownText.text = "1";
-      this.countdownTimer = 1.0;
-      this.setTrafficLights(true, true, true);    // rojo + amarillo + verde
-      this.opts.audio?.playOne?.("countBeep");
-    } else if (this.countdown === 1) {
-      // GO!
-      this.countdown = 0;
-      this.countdownText.text = "GO!";
-      (this.countdownText.style as any).fill = 0x00ff66;
-      this.goFlashTimer = 0.6;
-      this.countdownTimer = 0.4;
+    // --- DRIFT con tecla dedicada ---
+    // --- DRIFT con tecla dedicada ---
+    const drifting = !!this.input.a.drift && !this.controlsLocked;
 
-      // Opción A (acumulativo): mantener las 3 encendidas
-      this.setTrafficLights(true, true, true);
-      // Opción B (solo verde en GO): descomentá esta y comentá la de arriba
-      // this.setTrafficLights(false, false, true);
-
-      this.opts.audio?.playOne?.("countGo");
-    } else {
-      // Arranca la carrera
-      this.overlay.removeChildren();
-      this.overlay.visible = false;
-      this.controlsLocked = false;
+    if (drifting) {
+      // manteniendo la tecla → acumula hold
+      this.driftHold += dt;
+    } else if (this._prevDrift && !drifting) {
+      // se soltó la tecla drift
+      if (this.driftHold >= this.driftHoldThreshold) this.triggerDriftBoost();
+      this.driftHold = 0;
     }
-  }
+    this._prevDrift = drifting;
 
-  // Parpadeo del "GO!"
-  if (this.goFlashTimer > 0) {
-    this.goFlashTimer -= dt;
-    (this.countdownText as any).alpha = 0.55 + 0.45 * Math.sin(this.goFlashTimer * 20);
-  }
-}
+    // consumir boost y cooldown
+    if (this.driftBoostTimer > 0) this.driftBoostTimer -= dt;
 
-  if (this.ended) return;
-  if (this.finished) return; 
+    const cdBefore = this.driftCdTimer;
+    if (this.driftCdTimer > 0) {
+      this.driftCdTimer = Math.max(0, this.driftCdTimer - dt);
+      // avisá cuando vuelve a estar disponible
+      if (cdBefore > 0 && this.driftCdTimer === 0) {
+        this.showLapAnnounce?.("Boost listo"); // o un iconito propio en el HUD
+      }
+    }
+
+
+    // COUNTDOWN
+    if (this.controlsLocked && !this.finished && !this.ended) {
+      this.countdownTimer -= dt;
+      if (this.countdownTimer <= 0) {
+        if (this.countdown === 3) {
+          // Pasa a "2" → se enciende AMARILLO (rojo ya venía de setup)
+          this.countdown = 2;
+          this.countdownText.text = "2";
+          this.countdownTimer = 1.0;
+          this.setTrafficLights(true, true, false);   // rojo + amarillo
+          this.opts.audio?.playOne?.("countBeep");
+        } else if (this.countdown === 2) {
+          // Pasa a "1" → se enciende VERDE (quedan las 3 encendidas)
+          this.countdown = 1;
+          this.countdownText.text = "1";
+          this.countdownTimer = 1.0;
+          this.setTrafficLights(true, true, true);    // rojo + amarillo + verde
+          this.opts.audio?.playOne?.("countBeep");
+        } else if (this.countdown === 1) {
+          // GO!
+          this.countdown = 0;
+          this.countdownText.text = "GO!";
+          (this.countdownText.style as any).fill = 0x00ff66;
+          this.goFlashTimer = 0.6;
+          this.countdownTimer = 0.4;
+
+          // Opción A (acumulativo): mantener las 3 encendidas
+          this.setTrafficLights(true, true, true);
+          // Opción B (solo verde en GO): descomentá esta y comentá la de arriba
+          // this.setTrafficLights(false, false, true);
+
+          this.opts.audio?.playOne?.("countGo");
+        } else {
+          // Arranca la carrera
+          this.overlay.removeChildren();
+          this.overlay.visible = false;
+          this.controlsLocked = false;
+        }
+      }
+
+      // Parpadeo del "GO!"
+      if (this.goFlashTimer > 0) {
+        this.goFlashTimer -= dt;
+        (this.countdownText as any).alpha = 0.55 + 0.45 * Math.sin(this.goFlashTimer * 20);
+      }
+    }
+
+    if (this.ended) return;
+    if (this.finished) return;
 
     // tiempo total (visual)
     if (!this.finished && !this.controlsLocked) {
@@ -1188,11 +1417,11 @@ if (this.controlsLocked && !this.finished && !this.ended) {
     // GOD MODE: countdown + FX (halo/trail)
     if (this.godMode) {
       this.godFireTimer -= dt;
-if (this.godFireTimer <= 0) {
-  this.emitGodFire();
-  this.godFireTimer = 0.04; // ~25 fps partículas
-}
-this.updateGodFire(dt);
+      if (this.godFireTimer <= 0) {
+        this.emitGodFire();
+        this.godFireTimer = 0.04; // ~25 fps partículas
+      }
+      this.updateGodFire(dt);
       this.godTimer -= dt;
       if (this.godTimer <= 0) {
         this.setGod(false);
@@ -1229,13 +1458,14 @@ this.updateGodFire(dt);
     // velocidad jugador (x2 en godMode)
     const accelPressed = this.input.a.right && !this.controlsLocked;
     const boost = this.godMode ? 2.0 : 1.0;
-    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost;
+    const driftExtra = this.driftBoostTimer > 0 ? this.driftBoostPower : 0;
+    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost + driftExtra;
     if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
     else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
 
     // mover jugador
     if (!this.controlsLocked) {
-      if (this.input.a.left)  this.playerX -= this.strafe * dt;
+      if (this.input.a.left) this.playerX -= this.strafe * dt;
       if (this.input.a.right) this.playerX += this.strafe * dt * 0.6;
     }
     this.playerX = Math.max(this.minX, Math.min(this.maxX, this.playerX));
@@ -1247,34 +1477,34 @@ this.updateGodFire(dt);
       this.jumpOffset += this.jumpVy * dt;
       if (this.jumpOffset <= 0) { this.jumpOffset = 0; this.jumping = false; this.jumpVy = 0; }
     }
-// ==== Anti-cheese: pegado al borde derecho saltando ====
-if (!this.controlsLocked && !this.finished && !this.ended) {
-  const nearRight = this.playerX >= (this.maxX - this.edgeZonePx);
-  const abusingJump = this.jumping || !!this.input.a.fire;
+    // ==== Anti-cheese: pegado al borde derecho saltando ====
+    if (!this.controlsLocked && !this.finished && !this.ended) {
+      const nearRight = this.playerX >= (this.maxX - this.edgeZonePx);
+      const abusingJump = this.jumping || !!this.input.a.fire;
 
-  if (nearRight && abusingJump) {
-    this.edgeStickTimer += dt;
-    if (this.edgeStickTimer >= this.edgeStickSec && this.edgePenaltyTimer <= 0) {
-      this.edgePenaltyTimer = this.edgePenaltyDur;
-      this.edgeStickTimer = 0;
-      this.showLapAnnounce?.("¡PENALIZACIÓN!");
-      this.opts.audio?.playOne?.("impact");
+      if (nearRight && abusingJump) {
+        this.edgeStickTimer += dt;
+        if (this.edgeStickTimer >= this.edgeStickSec && this.edgePenaltyTimer <= 0) {
+          this.edgePenaltyTimer = this.edgePenaltyDur;
+          this.edgeStickTimer = 0;
+          this.showLapAnnounce?.("¡PENALIZACIÓN!");
+          this.opts.audio?.playOne?.("impact");
+        }
+      } else {
+        this.edgeStickTimer = Math.max(0, this.edgeStickTimer - dt * 0.5);
+      }
+
+      if (this.edgePenaltyTimer > 0) {
+        this.edgePenaltyTimer -= dt;
+        this.playerX -= this.edgePenaltySpeed * dt;
+
+        if (this.playerX > this.maxX - this.edgeZonePx) {
+          this.playerX = this.maxX - this.edgeZonePx;
+        }
+      }
+
+      this.playerX = Math.max(this.minX, Math.min(this.maxX, this.playerX));
     }
-  } else {
-    this.edgeStickTimer = Math.max(0, this.edgeStickTimer - dt * 0.5);
-  }
-
-  if (this.edgePenaltyTimer > 0) {
-    this.edgePenaltyTimer -= dt;
-    this.playerX -= this.edgePenaltySpeed * dt;
-
-    if (this.playerX > this.maxX - this.edgeZonePx) {
-      this.playerX = this.maxX - this.edgeZonePx;
-    }
-  }
-
-  this.playerX = Math.max(this.minX, Math.min(this.maxX, this.playerX));
-}
 
     // disparo
     const shootPressed = (this.input as any).a.fire2 || (this.input as any).a.ctrl || (this.input as any).a.F;
@@ -1291,6 +1521,7 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
     // aplicar jugador
     this.player.x = this.playerX;
     this.player.y = this.playerY - this.jumpOffset;
+    this.updateShieldFX(dt);
 
     // actualizar trail (mover y desvanecer)
     if (this.godTrail.length) {
@@ -1306,7 +1537,7 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
       // limpiar
       this.godTrail = this.godTrail.filter(tp => {
         if (tp.life > 0) return true;
-        try { tp.sp.destroy(); } catch {}
+        try { tp.sp.destroy(); } catch { }
         return false;
       });
     }
@@ -1335,9 +1566,8 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
       r.jitterT! += dt;
       let jitter = 0;
       if (r.jitterT! > 0.4) { r.jitterT = 0; jitter = (Math.random() * 50 - 25); }
-
-      const rivalMaxWhenYouBoost = this.maxSpeed - 15; // vos 520, ellos ~505
-      const rivalMaxWhenCruise   = this.maxSpeed + 35; // si no acelerás, pueden 555
+      const rivalMaxWhenYouBoost = this.maxSpeed - 15 + 20 * (this.tuning.enemyMultiplier - 1);
+      const rivalMaxWhenCruise = this.maxSpeed + 35 + 40 * (this.tuning.enemyMultiplier - 1);
 
       // handicap durante godMode (les cuesta seguirte)
       const godHandicap = this.godMode ? -120 : 0;
@@ -1410,23 +1640,23 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
     }
 
     // proyectiles enemigos
-   for (const s of this.shots) {
-  s.pos.x += s.vx * dt;
-  s.pos.y += s.vy * dt;
-  s.sp.x = this.screenX(s.pos.x);
-  s.sp.y = s.pos.y;
+    for (const s of this.shots) {
+      s.pos.x += s.vx * dt;
+      s.pos.y += s.vy * dt;
+      s.sp.x = this.screenX(s.pos.x);
+      s.sp.y = s.pos.y;
 
-  // 👇 rotación del vinilo si tiene rotSpeed
-  const rs = (s.sp as any).rotSpeed ?? 0;
-  if (rs) s.sp.rotation += rs * dt;
+      // 👇 rotación del vinilo si tiene rotSpeed
+      const rs = (s.sp as any).rotSpeed ?? 0;
+      if (rs) s.sp.rotation += rs * dt;
 
-  const pb = this.player.getBounds(), sb = s.sp.getBounds();
-  const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
-  if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
-    if (this.hurtPlayer(12)) this.opts.audio?.playOne?.("impact");
-    s.pos.x = this.camX - 9999;
-  }
-}
+      const pb = this.player.getBounds(), sb = s.sp.getBounds();
+      const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
+      if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
+        if (this.hurtPlayer(12)) this.opts.audio?.playOne?.("impact");
+        s.pos.x = this.camX - 9999;
+      }
+    }
 
     this.shots = this.shots.filter(s => {
       const alive = s.pos.x > this.camX - 300 && s.pos.x < this.camX + this.W + 400 && s.pos.y > 0 && s.pos.y < this.H;
@@ -1455,6 +1685,13 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
       this.godPickupTimer = this.godPickupMin + Math.random() * (this.godPickupMax - this.godPickupMin);
     }
 
+    // SHIELD pickup
+    this.shieldPickupTimer -= dt;
+    if (this.shieldPickupTimer <= 0) {
+      this.spawnShieldPickup();
+      this.shieldPickupTimer = this.shieldPickupMin + Math.random() * (this.shieldPickupMax - this.shieldPickupMin);
+    }
+
     for (const p of this.pickups) {
       p.pos.x -= this.baseSpeed * dt;
       p.sp.x = this.screenX(p.pos.x); p.sp.y = p.pos.y;
@@ -1469,7 +1706,7 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
     for (const s of this.playerShots) {
       s.pos.x += s.vx * dt; s.pos.y += s.vy * dt;
       s.sp.x = this.screenX(s.pos.x); s.sp.y = s.pos.y;
-        s.sp.rotation = Math.sin(s.pos.x * 0.02) * 0.25;
+      s.sp.rotation = Math.sin(s.pos.x * 0.02) * 0.25;
 
 
       for (const e of this.enemies) {
@@ -1493,7 +1730,7 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
 
     // culling enemigos
     this.enemies = this.enemies.filter(e => { const alive = e.pos.x > this.camX - 600; if (!alive) e.sp.destroy(); return alive; });
-this.updateRacePositions();
+    this.updateRacePositions();
 
     // ===== Mini-mapa al final del frame =====
     this.updateMiniMap();
@@ -1501,26 +1738,28 @@ this.updateRacePositions();
 
   /* ============================== Destroy ================================ */
   destroy() {
-        // NUEVO NUMERO SEGUIMIENTO: limpiar labels
-    try { this.posTextP.destroy(); } catch {}
-    try { this.posTextR1.destroy(); } catch {}
-    try { this.posTextR2.destroy(); } catch {}
+    // NUEVO NUMERO SEGUIMIENTO: limpiar labels
+    try { this.posTextP.destroy(); } catch { }
+    try { this.posTextR1.destroy(); } catch { }
+    try { this.posTextR2.destroy(); } catch { }
 
-    try { this.stage.removeChildren(); } catch {}
-    try { this.world.removeChildren(); } catch {}
-    try { this.bgLayer.removeChildren(); } catch {}
-    try { this.hud.removeChildren(); } catch {}
-    for (const e of this.enemies) { try { e.sp.destroy(); } catch {} }
-    for (const r of this.rivals)  { try { r.sp.destroy(); } catch {} }
-    for (const s of this.shots)   { try { s.sp.destroy(); } catch {} }
-    for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
-    for (const p of this.pickups) { try { p.sp.destroy(); } catch {} }
-    for (const t of this.godTrail) { try { t.sp.destroy(); } catch {} }
-    try { this.godHalo.destroy(); } catch {}
-    for (const f of this.godFire) { try { f.sp.destroy(); } catch {} }
-try { this.godFireContainer.destroy({ children: true }); } catch {}
-    try { this.trailContainer.destroy({ children: true }); } catch {}
-    try { this.stage.destroy({ children: true }); } catch {}
+    try { this.stage.removeChildren(); } catch { }
+    try { this.world.removeChildren(); } catch { }
+    try { this.bgLayer.removeChildren(); } catch { }
+    try { this.hud.removeChildren(); } catch { }
+    for (const e of this.enemies) { try { e.sp.destroy(); } catch { } }
+    for (const r of this.rivals) { try { r.sp.destroy(); } catch { } }
+    for (const s of this.shots) { try { s.sp.destroy(); } catch { } }
+    for (const s of this.playerShots) { try { s.sp.destroy(); } catch { } }
+    for (const p of this.pickups) { try { p.sp.destroy(); } catch { } }
+    for (const t of this.godTrail) { try { t.sp.destroy(); } catch { } }
+    try { this.godHalo.destroy(); } catch { }
+    for (const f of this.godFire) { try { f.sp.destroy(); } catch { } }
+    try { this.godFireContainer.destroy({ children: true }); } catch { }
+    try { this.trailContainer.destroy({ children: true }); } catch { }
+    try { this.stage.destroy({ children: true }); } catch { }
+    try { this.shieldText.destroy(); } catch {}
+    try { this.shieldRing.destroy(); } catch {}
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
   }
 }

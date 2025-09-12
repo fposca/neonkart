@@ -3,6 +3,8 @@ import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
 import { Input } from "./input";
 import type { AudioBus } from "./audio";
+import { getTuning } from "./difficulty";
+import { getSkin } from "./skins";
 
 /* =============================== Tipos =================================== */
 type Vec2 = { x: number; y: number };
@@ -45,6 +47,8 @@ type LevelOpts = {
   onGameOver?: () => void;
   onLevelComplete?: (place: 1 | 2 | 3) => void;
   audio?: AudioBus;
+   difficulty?: import("./difficulty").DifficultyId; // 👈
+  skin?: import("./skins").SkinId; 
 };
 
 /* ============================== Clase ==================================== */
@@ -58,6 +62,8 @@ export class Level4 {
     this.app = app;
     this.input = input;
     this.opts = opts;
+      this.tuning = getTuning(opts.difficulty);
+  this.skinDef = getSkin(opts.skin);
 
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer);
@@ -248,8 +254,11 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
   /* ===== Enemigos (más agresivos) ===== */
   enemies: Enemy[] = [];
   enemyTimer = 0;
-  enemyMin = 1.2;  // spawnea más seguido
-  enemyMax = 2.2;
+baseEnemyMin = 2.5;
+baseEnemyMax = 4.5;
+
+get enemyMin() { return this.baseEnemyMin / this.tuning.enemyMultiplier; }
+get enemyMax() { return this.baseEnemyMax / this.tuning.enemyMultiplier; }
 
   /* ===== Rivales (ligeramente más rápidos) ===== */
   rivals: Rival[] = [];
@@ -309,6 +318,8 @@ enemyScale  = 0.65; // runners/torretas
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private screenX(worldX: number) { return worldX - this.camX; }
   private clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+private tuning!: ReturnType<typeof getTuning>;
+private skinDef!: ReturnType<typeof getSkin>;
 /* ===== Anti-cheese borde derecho ===== */
 private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
 private edgeStickSec = 2.0;       // tiempo para activar penalización
@@ -466,6 +477,8 @@ private edgePenaltyTimer = 0;     // penalización activa
     this.hud.addChild(this.lapText); this.updateLapHud();
 
     this.levelTag.position.set(230, 64);
+        this.levelTag.text = `L4 • ${this.opts.difficulty ?? "normal"}`;
+
     this.hud.addChild(this.levelTag);
 
     // Mini-mapa
@@ -639,7 +652,7 @@ private enemyShoot(from: Enemy) {
   const sxW = from.pos.x,      sy = from.pos.y - 24;
   const dxW = this.camX + this.player.x, dy = this.player.y - 10;
   const ang = Math.atan2(dy - sy, dxW - sxW);
-  const v = 430;
+const v = 430 * (0.9 + 0.4 * this.tuning.enemyMultiplier);
 
   const scale = from.kind === "turret" ? this.DISC_SCALE_TURRET : this.DISC_SCALE_RUNNER;
   const gfx = this.makeReggaetonDisc(scale); // vinilo grande para ambos
@@ -1017,8 +1030,7 @@ for (let i = 0; i < this.rivals.length; i++) {
   const godHandicap = this.godMode ? -120 : 0;
 
   const rivalMaxWhenYouBoost = this.maxSpeed - 15;
-  const rivalMaxWhenCruise   = this.maxSpeed + 35;
-
+const rivalMaxWhenCruise = this.maxSpeed + 35 + 40 * (this.tuning.enemyMultiplier - 1);
   const targetVBase = r.base + osc + catchup + godHandicap;
   const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
   const minRival = this.baseSpeed + 40;

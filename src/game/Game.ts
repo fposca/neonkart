@@ -12,8 +12,10 @@ import { withLoader } from "../ui/loader";
 import { IMG } from "./assets";
 import { Level6 } from "./Level6"; 
 type GameOpts = {
-  onGameOver?: () => void;   // lo usamos también como “fin del juego” (win o lose)
+  onGameOver?: () => void;
   audio?: AudioBus;
+  difficulty?: import("./difficulty").DifficultyId;
+  skin?: import("./skins").SkinId;
 };
 
 type InitOpts = {
@@ -204,6 +206,8 @@ export class Game {
       onGameOver: () => { this.audio.stopSfx?.("motor"); this.opts.onGameOver?.(); },
       onLevelComplete: async (_p) => { await this.startLevel2(); },
       audio: this.audio,
+      difficulty: this.opts.difficulty,   // 👈 NUEVO
+  skin: this.opts.skin,   
     });
     await withLoader(l.load(), "Cargando Nivel 1…");
     this.level = l;
@@ -224,6 +228,8 @@ export class Game {
       onGameOver: () => { this.audio.stopSfx?.("motor"); this.opts.onGameOver?.(); },
       onLevelComplete: async (_p) => { await this.startLevel3(); },
       audio: this.audio,
+      difficulty: this.opts.difficulty,   // 👈 NUEVO
+  skin: this.opts.skin,   
     });
     await withLoader(l.load(), "Cargando Nivel 2…");
     this.level = l;
@@ -244,6 +250,8 @@ export class Game {
       onGameOver: () => { this.audio.stopSfx?.("motor"); this.opts.onGameOver?.(); },
       onLevelComplete: async (_p) => { await this.startLevel4(); },
       audio: this.audio,
+      difficulty: this.opts.difficulty,   // 👈 NUEVO
+  skin: this.opts.skin,   
     });
     await withLoader(l.load(), "Cargando Nivel 3…");
     this.level = l;
@@ -264,6 +272,8 @@ export class Game {
       onGameOver: () => { this.audio.stopSfx?.("motor"); this.opts.onGameOver?.(); },
       onLevelComplete: async (_p) => { await this.startLevel5(); },
       audio: this.audio,
+      difficulty: this.opts.difficulty,   // 👈 NUEVO
+  skin: this.opts.skin,   
     });
     await withLoader(l.load(), "Cargando Nivel 4…");
     this.level = l;
@@ -284,6 +294,8 @@ export class Game {
       onGameOver: () => { this.audio.stopSfx?.("motor"); this.opts.onGameOver?.(); },
       onLevelComplete: async (_p) => { await this.startLevel6(); },
       audio: this.audio,
+      difficulty: this.opts.difficulty,   // 👈 NUEVO
+  skin: this.opts.skin,   
     });
     await withLoader(l.load(), "Cargando Nivel 5…");
     this.level = l;
@@ -304,6 +316,8 @@ export class Game {
       onGameOver: () => { this.audio.stopSfx?.("motor"); this.opts.onGameOver?.(); },
       onLevelComplete: async (_p) => { await this.startLevel7(); },
       audio: this.audio,
+      difficulty: this.opts.difficulty,   // 👈 NUEVO
+  skin: this.opts.skin,   
     });
     await withLoader(l.load(), "Cargando Nivel 6…");
     this.level = l;
@@ -324,7 +338,8 @@ export class Game {
       onGameOver: () => {                   // perdiste en el 7 → no terminó la campaña
         this.gameFinished = false;
         this.audio.stopSfx?.("motor");
-        this.opts.onGameOver?.();
+        this.opts.onGameOver?.();  
+        
       },
       onLevelComplete: (_p) => {            // ganaste el juego ✅
         this.gameFinished = true;
@@ -332,6 +347,8 @@ export class Game {
         this.opts.onGameOver?.();
       },
       audio: this.audio,
+      difficulty: this.opts.difficulty,  // 👈 agregar
+  skin: this.opts.skin, 
     });
     await withLoader(l.load(), "Cargando Nivel 7…");
     this.level = l;

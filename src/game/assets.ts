@@ -24,7 +24,7 @@ export const IMG = {
 
   // Pickups
   pedalDist: "/assets/img/pickup-pedal-distorsion.png",
-
+shield: "/assets/img/shield.png",
   kartRival1: "/assets/img/karting-rival1.png",
   kartRival2: "/assets/img/karting-rival2.png",
   finishLap1: "/assets/img/finish-lap1.png",

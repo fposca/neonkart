@@ -3,6 +3,8 @@ import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
 import { Input } from "./input";
 import type { AudioBus } from "./audio";
+import { getTuning } from "./difficulty";
+import { getSkin } from "./skins";
 
 /* =============================== Tipos =================================== */
 type Vec2 = { x: number; y: number };
@@ -36,6 +38,8 @@ type LevelOpts = {
   onGameOver?: () => void;
   onLevelComplete?: (place: 1 | 2 | 3) => void;
   audio?: AudioBus;
+   difficulty?: import("./difficulty").DifficultyId; // 👈
+  skin?: import("./skins").SkinId; 
 };
 
 /* ============================== Clase ==================================== */
@@ -48,6 +52,8 @@ export class Level7 {
     this.app = app;
     this.input = input;
     this.opts = opts;
+      this.tuning = getTuning(opts.difficulty);
+  this.skinDef = getSkin(opts.skin);
 
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer, this.world, this.hud, this.overlay);
@@ -89,6 +95,8 @@ export class Level7 {
   private finishSprite!: PIXI.Sprite | PIXI.Graphics;
   private finishTexLap?: PIXI.Texture;
   private finishTexFinal?: PIXI.Texture;
+private tuning!: ReturnType<typeof getTuning>;
+private skinDef!: ReturnType<typeof getSkin>;
 
   /* ===== Pista / vueltas ===== */
   camX = 0;
@@ -204,8 +212,11 @@ friction  = 200;   // antes 260 — pierde menos cuando sueltas
   /* ===== Enemigos ===== */
   enemies: Enemy[] = [];
   enemyTimer = 0;
-  enemyMin = 1.8;
-  enemyMax = 2.1;
+ baseEnemyMin = 2.5;
+baseEnemyMax = 4.5;
+
+get enemyMin() { return this.baseEnemyMin / this.tuning.enemyMultiplier; }
+get enemyMax() { return this.baseEnemyMax / this.tuning.enemyMultiplier; }
   runnerFactorMin = 0.75; // 55% de tu baseSpeed
 runnerFactorMax = 0.95; // 75% de tu baseSpeed
 minRunnerScreenSpeed = 240;
@@ -410,6 +421,8 @@ private redrawHP() {
 
     this.lapText.position.set(0, 64); this.updateLapHud(); this.hud.addChild(this.lapText);
     this.levelTag.position.set(230, 64); this.hud.addChild(this.levelTag);
+        this.levelTag.text = `L7 • ${this.opts.difficulty ?? "normal"}`;
+
 
     // Mini-mapa
     this.mapBg.clear()

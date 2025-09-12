@@ -3,6 +3,8 @@ import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
 import { Input } from "./input";
 import type { AudioBus } from "./audio";
+import { getTuning } from "./difficulty";
+import { getSkin } from "./skins";
 
 /* =============================== Tipos =================================== */
 type Vec2 = { x: number; y: number };
@@ -47,6 +49,8 @@ type LevelOpts = {
   onGameOver?: () => void;
   onLevelComplete?: (place: 1 | 2 | 3) => void; // último nivel: 1º = win, otro = game over
   audio?: AudioBus;
+   difficulty?: import("./difficulty").DifficultyId; // 👈
+  skin?: import("./skins").SkinId; 
 };
 
 /* ============================== Clase ==================================== */
@@ -60,6 +64,8 @@ export class Level5 {
     this.app = app;
     this.input = input;
     this.opts = opts;
+      this.tuning = getTuning(opts.difficulty);
+  this.skinDef = getSkin(opts.skin);
 
     this.app.stage.addChild(this.stage);
     this.stage.addChild(this.bgLayer);
@@ -116,7 +122,8 @@ mapLapTick = new PIXI.Graphics();
   private finishSprite!: PIXI.Sprite | PIXI.Graphics;
   private finishTexLap?: PIXI.Texture;    // finish-lap-ice.png
   private finishTexFinal?: PIXI.Texture;  // finish-ice.png
-
+private tuning!: ReturnType<typeof getTuning>;
+private skinDef!: ReturnType<typeof getSkin>;
   /* ===== Pista / vueltas (modo distancia) ===== */
   camX = 0;
   trackLength = 26000;             // vuelta más corta para final
@@ -226,8 +233,11 @@ accel     = 300;     // ↓ antes 560 (acelera con menos mordida)
   /* ===== Enemigos ===== */
   enemies: Enemy[] = [];
   enemyTimer = 0;
-  enemyMin = 2.2;
-  enemyMax = 3.6;
+baseEnemyMin = 2.5;
+baseEnemyMax = 4.5;
+
+get enemyMin() { return this.baseEnemyMin / this.tuning.enemyMultiplier; }
+get enemyMax() { return this.baseEnemyMax / this.tuning.enemyMultiplier; }
 
   /* ===== Disparos enemigos ===== */
   shots: Shot[] = [];
@@ -511,6 +521,8 @@ this.updateMiniMap();
     this.hud.addChild(this.lapText);
 
     this.levelTag.position.set(230, 64);
+        this.levelTag.text = `L5 • ${this.opts.difficulty ?? "normal"}`;
+
     this.hud.addChild(this.levelTag);
 
     // Cartel de anuncio
@@ -631,7 +643,8 @@ const r2: Rival = { sp: mk(this.tex.rival2), pos: { x: startWorldX - 60, y: this
     sp.zIndex = 750;
     sp.scale.set(this.enemyScale);
     this.world.addChild(sp);
-const v = this.baseSpeed * (0.85 + Math.random() * 0.15); // 85%..100% del base
+const v = 430 * (0.9 + 0.4 * this.tuning.enemyMultiplier);
+
 this.enemies.push({ kind: "runner", sp, pos: { x, y }, speed: v, hp: 3, dead: false });
   }
   private spawnTurret() {
