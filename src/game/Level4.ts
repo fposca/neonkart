@@ -1,3 +1,5 @@
+/* eslint-disable no-empty */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/game/Level4.ts
 import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
@@ -32,7 +34,7 @@ type Turret = {
 type Enemy = Runner | Turret;
 type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
 // ⬇️ ahora soporta “life” y “god”
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" | "shield" };
 
 type Rival = {
   sp: PIXI.Sprite;
@@ -62,6 +64,7 @@ export class Level4 {
     this.app = app;
     this.input = input;
     this.opts = opts;
+    
       this.tuning = getTuning(opts.difficulty);
   this.skinDef = getSkin(opts.skin);
 
@@ -109,9 +112,9 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
 
   /* ===== Pista / vueltas ===== */
   camX = 0;
-  trackLength = 26000;           // más largo que L3
+  trackLength = 2600;           // más largo que L3
   lapFinishX = this.trackLength;
-  lapsTotal = 4;                // más vueltas = más desafío
+  lapsTotal = 1;                // más vueltas = más desafío
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -137,12 +140,6 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
   });
   lapAnnounceTimer = 0;
 
-  // Timer visual (opcional, como L3)
-  raceTime = 0;
-  timeText = new PIXI.Text({
-    text: "00:00.000",
-    style: { fill: 0xffffff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
-  });
 
   // Ammo HUD
   ammoText = new PIXI.Text({
@@ -150,6 +147,14 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
     style: { fill: 0x00d2ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
   });
 
+
+   // HUD poder + timer
+    powerBar = new PIXI.Graphics();
+    raceTime = 0; // sigue contando, pero NO afecta vueltas
+    timeText = new PIXI.Text({
+      text: "00:00.000",
+      style: { fill: 0xffffff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+    });
   // Mini-mapa
   mapBg = new PIXI.Graphics();
   mapW = 560;
@@ -256,10 +261,33 @@ readonly DISC_SCALE_RUNNER = 4.0;  // tamaño vinilo runner
   enemyTimer = 0;
 baseEnemyMin = 2.5;
 baseEnemyMax = 4.5;
+  // ===== Escudo (armor) =====
+  shieldRing = new PIXI.Graphics();
+  shieldFlash = 0;          // para un pequeño flash al recibir golpe
 
 get enemyMin() { return this.baseEnemyMin / this.tuning.enemyMultiplier; }
 get enemyMax() { return this.baseEnemyMax / this.tuning.enemyMultiplier; }
-
+ // timers drift
+  driftHold = 0;                   // cuánto llevás presionando la tecla drift
+  driftBoostTimer = 0;             // tiempo restante del boost activo
+  driftBoostDuration = 0.5;        // ⬅ dura 1.0s (antes 0.6)
+  driftBoostPower = 2160;           // ⬅ un toque más fuerte (antes 140)
+  driftHoldThreshold = 0.8;        // debés mantener 0.8s antes de soltar
+  driftCooldown = 5;              // ⬅ cooldown de 15s entre boosts
+  driftCdTimer = 0;                // tiempo restante de cooldown
+  _prevDrift = false;              // estado previo para detectar “soltada”
+  // ==== SHIELD ====
+shieldCharges = 0;
+shieldMax = 5;
+shieldText = new PIXI.Text({
+  text: "",
+  style: { fill: 0x87e6ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+});
+shieldPulseT = 0; // animación
+// timers de spawn del pickup shield
+shieldPickupTimer = 14; // primer intento ~14s
+shieldPickupMin   = 18;
+shieldPickupMax   = 26;
   /* ===== Rivales (ligeramente más rápidos) ===== */
   rivals: Rival[] = [];
 
@@ -276,6 +304,10 @@ get enemyMax() { return this.baseEnemyMax / this.tuning.enemyMultiplier; }
   lifePickupMin = 14;
   lifePickupMax = 20;
 
+   // distorsión (arma)
+    distortTimer = 0;
+    distortDuration = 10;
+  
   /* ===== Modo Dios (más frecuente en L4) ===== */
   godMode = false;
   godTimer = 0;
@@ -314,12 +346,53 @@ enemyScale  = 0.65; // runners/torretas
   lampGreen = new PIXI.Graphics();
 
   /* ============================ Helpers ================================== */
+  private updateShieldHud() {
+  if (this.shieldCharges > 0) {
+    this.shieldText.text = `Shield: ${this.shieldCharges}`;
+    this.shieldText.visible = true;
+    this.layoutHudRow();
+    
+  } else {
+    this.shieldText.text = "";
+    this.shieldText.visible = false;
+  }
+}
+private redrawPower() {
+    this.powerBar.clear();
+    if (!this.hasDistortion) return;
+    const p = Math.max(0, this.distortTimer / this.distortDuration);
+    this.powerBar.roundRect(0, 0, 260 * p, 4, 2).fill(0x00d2ff);
+  }
+private drawShieldRing() {
+  const g = this.shieldRing;
+  g.clear();
+  // doble aro simple
+  g.circle(0, 0, 46).stroke({ width: 3, color: 0x66e0ff, alpha: 0.9 });
+  g.circle(0, 0, 52).stroke({ width: 2, color: 0x00d2ff, alpha: 0.5 });
+}
+
+  private vibrate(ms: number) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    try { (navigator as any).vibrate?.(ms); } catch { }
+  }
+ 
+  private triggerDriftBoost() {
+    if (this.driftCdTimer > 0) return;        // gate por cooldown
+
+    this.driftBoostTimer = this.driftBoostDuration;
+    this.driftCdTimer = this.driftCooldown;
+
+    this.showLapAnnounce?.("¡BOOST!");
+    this.opts.audio?.playOne?.("boost");
+    this.vibrate(40);                          // ⬅ importante el 'this.'
+  }
+
   private nextEnemyIn() { this.enemyTimer = this.enemyMin + Math.random() * (this.enemyMax - this.enemyMin); }
   private async tryLoad(url?: string) { if (!url) return undefined; try { return await PIXI.Assets.load(url); } catch { return undefined; } }
   private screenX(worldX: number) { return worldX - this.camX; }
   private clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
-private tuning!: ReturnType<typeof getTuning>;
-private skinDef!: ReturnType<typeof getSkin>;
+  private tuning!: ReturnType<typeof getTuning>;
+  private skinDef!: ReturnType<typeof getSkin>;
 /* ===== Anti-cheese borde derecho ===== */
 private edgeZonePx = 18;          // cuánto consideramos “pegado” al borde
 private edgeStickSec = 2.0;       // tiempo para activar penalización
@@ -368,7 +441,7 @@ private edgePenaltyTimer = 0;     // penalización activa
     else if (lap === 2) t = this.finishTexLap2 ?? this.finishTexFallback;
     else t = this.finishTexFinal ?? this.finishTexFallback;
 
-    if (this.finishSprite) { try { this.finishSprite.destroy({ children: true }); } catch {} }
+    if (this.finishSprite) { try { this.finishSprite.destroy({ children: true }); } catch { /* empty */ } }
 
     if (t) {
       const s = new PIXI.Sprite(t);
@@ -416,6 +489,10 @@ private edgePenaltyTimer = 0;     // penalización activa
     // === Fondo/Suelo (con fallback) ===
     this.tex.fondo = (await this.tryLoad(fondo4)) ?? (await this.tryLoad(IMG.fondo));
     this.tex.suelo = (await this.tryLoad(suelo4)) ?? (await this.tryLoad(IMG.suelo));
+     this.tex.kart = await this.tryLoad(IMG.kartSide);
+    this.tex.kartHit = await this.tryLoad(IMG.kartHit);
+    this.tex.kartDead = await this.tryLoad(IMG.kartDead);
+    this.tex.kartShoot = await this.tryLoad(IMG.kartShoot);
 
     // Rivales nuevos
     this.tex.rival1 =
@@ -427,6 +504,23 @@ private edgePenaltyTimer = 0;     // penalización activa
       (await this.tryLoad((IMG as any).kartBrujo)) ??
       (await this.tryLoad("/assets/img/karting-brujo.png")) ??
       this.tex.enemy;
+
+    this.tex.shield = await this.tryLoad((IMG as any).shield ?? "/assets/img/shield.png");
+
+
+
+// 2) === OVERRIDE por skin ANTES de crear el sprite del jugador ===
+    const skin = this.skinDef; // viene del constructor: this.skinDef = getSkin(opts.skin)
+    if (skin) {
+      const side = await this.tryLoad(skin.kartSide);
+      const hit = await this.tryLoad(skin.kartHit);
+      const dead = await this.tryLoad(skin.kartDead);
+      const shoot = await this.tryLoad(skin.kartShoot);
+      if (side) this.tex.kart = side;
+      if (hit) this.tex.kartHit = hit;
+      if (dead) this.tex.kartDead = dead;
+      if (shoot) this.tex.kartShoot = shoot;
+    }
 
     // ---------- Fondo 2x ----------
     if (this.tex.fondo) {
@@ -469,7 +563,8 @@ private edgePenaltyTimer = 0;     // penalización activa
 
     this.ammoText.position.set(0, 40);
     this.hud.addChild(this.ammoText); this.updateAmmoHud();
-
+   
+    
     this.timeText.position.set(200, 40);
     this.hud.addChild(this.timeText);
 
@@ -481,6 +576,38 @@ private edgePenaltyTimer = 0;     // penalización activa
 
     this.hud.addChild(this.levelTag);
 
+    // HUD (HP, poder, ammo, tiempo, vueltas)
+    this.hud.position.set(20, 20);
+    this.hpBarBg.roundRect(0, 0, 260, 18, 9).fill(0x222).stroke({ width: 2, color: 0x000 });
+    this.hud.addChild(this.hpBarBg, this.hpBarFg);
+    this.powerBar.position.set(0, 22);
+    this.hud.addChild(this.powerBar);
+    this.ammoText.position.set(0, 40);
+    this.hud.addChild(this.ammoText);
+    // ⬇️ NUEVO: texto de escudo debajo del ammo
+    this.shieldText.position.set(140, 40);
+    this.hud.addChild(this.shieldText);
+// HUD Shield
+this.hud.addChild(this.shieldText);
+this.updateShieldHud();
+
+// FX escudo (en el mundo, encima del piso pero debajo del player)
+this.shieldRing.zIndex = 995;
+this.shieldRing.visible = false;
+this.world.addChild(this.shieldRing);
+    this.updateShieldHud(); // para que arranque en "Shield: 0"
+    this.timeText.position.set(200, 40);
+    this.hud.addChild(this.timeText);
+    // 👉 NUEVO: HUD del escudo
+
+// (opcional si tenés una textura para el pickup)
+this.tex.shield = await this.tryLoad((IMG as any).shield ?? "/assets/img/shield.png");
+    this.lapText.position.set(0, 64);
+    this.levelTag.position.set(230, 64);
+    this.hud.addChild(this.levelTag);
+    this.levelTag.text = `L4 • ${this.opts.difficulty ?? "normal"}`;
+    this.hud.addChild(this.lapText);
+    this.redrawHP(); this.redrawPower(); this.updateAmmoHud(); this.updateLapHud(); this.layoutHudRow();
     // Mini-mapa
     this.mapBg.clear()
       .roundRect(this.mapX, this.mapY, this.mapW, this.mapH, 3)
@@ -586,6 +713,14 @@ this.setupPositionLabels();
   }
 
   /* ============================ Spawns/FX ================================ */
+ 
+   private layoutHudRow() {
+  const gap = 12;
+  this.shieldText.position.set(
+    this.ammoText.x + this.ammoText.width + gap,
+    this.ammoText.y
+  );
+}
   private spawnRivalsAtStart() {
     const mk = (t?: PIXI.Texture) => {
       const sp = new PIXI.Sprite(t ?? this.tex.enemy ?? PIXI.Texture.WHITE);
@@ -732,7 +867,9 @@ this.setTrafficLights(true, false, false);
   this.enemyTimer = 9999;
 
   // destruir proyectiles para que no queden flotando (enemigos y jugador)
+  // eslint-disable-next-line no-empty
   for (const s of this.shots)       { try { s.sp.destroy(); } catch {} }
+  // eslint-disable-next-line no-empty
   for (const s of this.playerShots) { try { s.sp.destroy(); } catch {} }
   this.shots = [];
   this.playerShots = [];
@@ -802,6 +939,28 @@ this.lapAnnounceTimer = 0;
 
   /* =============================== Update ================================ */
   update(dt: number) {
+    const drifting = !!this.input.a.drift && !this.controlsLocked;
+if (drifting) {
+  this.driftHold += dt;
+} else if (this._prevDrift && !drifting) {
+  if (this.driftHold >= 0.8 && this.driftCdTimer <= 0) {
+    this.driftBoostTimer = this.driftBoostDuration;
+    this.driftCdTimer = this.driftCooldown;
+    this.showLapAnnounce?.("¡BOOST!");
+    this.opts.audio?.playOne?.("boost");
+    this.vibrate?.(40);
+  }
+  this.driftHold = 0;
+}
+this._prevDrift = drifting;
+
+if (this.driftBoostTimer > 0) this.driftBoostTimer -= dt;
+const cdBefore = this.driftCdTimer;
+if (this.driftCdTimer > 0) {
+  this.driftCdTimer = Math.max(0, this.driftCdTimer - dt);
+  if (cdBefore > 0 && this.driftCdTimer === 0) this.showLapAnnounce?.("Boost listo");
+}
+
     if (!this.ready) return;
     if (this.ended) return;
     if (this.finished) return; // congela todo tras cruzar la meta ✅
@@ -893,12 +1052,6 @@ if (this.controlsLocked && !this.finished && !this.ended) {
       this.godTrail = this.godTrail.filter(t => { const alive = t.life > 0; if (!alive) t.sp.destroy(); return alive; });
     }
 
-    // velocidad / lateral (boost más fuerte en L4)
-    const accelPressed = this.input.a.right && !this.controlsLocked;
-    const boost = this.godMode ? 2.1 : 1.0; // ⬅ boost alto
-    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost;
-    if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
-    else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
 
     if (!this.controlsLocked) {
       if (this.input.a.left)  this.playerX -= this.strafe * dt;
@@ -974,6 +1127,7 @@ if (!this.controlsLocked && !this.finished && !this.ended) {
     // aplicar jugador
     this.player.x = this.playerX;
     this.player.y = this.playerY - this.jumpOffset;
+    this.updateShieldFX(dt);
 
     // vueltas (por distancia)
     const playerWorldX = this.camX + this.player.x;
@@ -1008,6 +1162,14 @@ if (this.lapAnnounceTimer > 0) {
   this.lapAnnounce.alpha = t / total;
   if (this.lapAnnounceTimer <= 0) this.lapAnnounce.visible = false;
 }
+  // velocidad jugador (x2 en godMode)
+    const accelPressed = this.input.a.right && !this.controlsLocked;
+    const boost = this.godMode ? 2.0 : 1.0;
+    const driftExtra = this.driftBoostTimer > 0 ? this.driftBoostPower : 0;
+    const target = (accelPressed ? this.maxSpeed : this.baseSpeed) * boost + driftExtra;
+    if (this.speed < target) this.speed = Math.min(target, this.speed + this.accel * dt);
+    else this.speed = Math.max(target, this.speed - this.friction * dt * 0.5);
+
 
     /* ===== Rivales ===== */
 for (let i = 0; i < this.rivals.length; i++) {
@@ -1032,8 +1194,8 @@ for (let i = 0; i < this.rivals.length; i++) {
   const rivalMaxWhenYouBoost = this.maxSpeed - 15;
 const rivalMaxWhenCruise = this.maxSpeed + 35 + 40 * (this.tuning.enemyMultiplier - 1);
   const targetVBase = r.base + osc + catchup + godHandicap;
-  const maxRival = this.input.a.right ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
-  const minRival = this.baseSpeed + 40;
+const maxRival = accelPressed ? rivalMaxWhenYouBoost : rivalMaxWhenCruise;
+      const minRival = this.baseSpeed + 40;
 
   const targetV = Math.max(minRival, Math.min(maxRival, targetVBase));
   r.speed = r.speed * 0.82 + targetV * 0.18;
@@ -1142,6 +1304,12 @@ if (R.shootCd <= 0 && !R.dead && !this.controlsLocked) {
       this.spawnGodPickup();
       this.godPickupTimer = this.godPickupMin + Math.random() * (this.godPickupMax - this.godPickupMin);
     }
+  // SHIELD pickup
+ this.shieldPickupTimer -= dt;
+if (this.shieldPickupTimer <= 0 && !this.controlsLocked) {
+  this.spawnShieldPickup();
+  this.shieldPickupTimer = this.shieldPickupMin + Math.random() * (this.shieldPickupMax - this.shieldPickupMin);
+}
 
     for (const p of this.pickups) {
       p.pos.x -= this.baseSpeed * dt;
@@ -1261,7 +1429,11 @@ if (R.shootCd <= 0 && !R.dead && !this.controlsLocked) {
       this.hp = Math.min(this.maxHP, this.hp + 25);
       this.redrawHP();
       this.opts.audio?.playOne?.("pickup");
-    } else if (p.kind === "god") {
+    }else if (p.kind === "shield") {
+  this.setShield(true, this.shieldMax); // recarga al máximo y muestra el aro
+  this.opts.audio?.playOne?.("pickup");
+}
+    else if (p.kind === "god") {
       if (this.godPickupsSpawned < this.godPickupsMax) {
         this.godPickupsSpawned++;
         this.setGod(true);
@@ -1275,7 +1447,54 @@ private colorForPlace(place: number): number {
   if (place === 2) return 0xc0c0c0;
   return 0x7a7a7a;
 }
+private setShield(on: boolean, charges = this.shieldMax) {
+  if (on) {
+    this.shieldCharges = charges;
+    this.drawShieldRing();
+    this.shieldRing.visible = true;
+  } else {
+    this.shieldCharges = 0;
+    this.shieldRing.visible = false;
+    this.shieldRing.clear();
+  }
+  this.updateShieldHud();
+}
+  private updateShieldFX(dt: number) {
+  if (this.shieldCharges <= 0) {
+    this.shieldRing.visible = false;
+    return;
+  }
+  this.shieldRing.visible = true;
+  this.shieldRing.position.set(this.player.x, this.player.y - this.jumpOffset);
 
+  if (this.shieldFlash > 0) this.shieldFlash -= dt;
+
+  const pulse = 0.75 + 0.25 * Math.sin((this.raceTime * 5) + (this.shieldFlash * 20));
+  this.shieldRing
+    .clear()
+    .circle(0, 0, 56).stroke({ width: 6, color: 0x66ccff, alpha: pulse })
+    .circle(0, 0, 62).stroke({ width: 2, color: 0x99ddff, alpha: 0.35 });
+}
+
+
+  private spawnShieldPickup() {
+    if (this.controlsLocked) return;
+    const x = this.camX + this.W + 200;
+    const y = this.playerY - 40;
+
+    const sp = new PIXI.Sprite(this.tex.shield ?? PIXI.Texture.WHITE);
+    sp.anchor.set(0.5);
+    sp.zIndex = 815;
+
+    // fallback visual si no hay textura
+    if (!this.tex.shield) {
+      const g = new PIXI.Graphics().circle(0, 0, 10).fill(0x66ccff);
+      sp.texture = this.app.renderer.generateTexture(g);
+    }
+
+    this.world.addChild(sp);
+    this.pickups.push({ sp, pos: { x, y }, kind: "shield" });
+  }
 // 🎵 Disparo como "nota musical"
 private makeNoteShot(): PIXI.Graphics {
   const col = 0xff00ff;
@@ -1342,15 +1561,34 @@ private updateRacePositions() {
 
   /* ============================== Daño player ============================ */
   private hurtPlayer(dmg: number): boolean {
-    if (this.invuln > 0 || this.ended || this.finished || this.godMode) return false; // nada de daño en GOD
-    this.hp = Math.max(0, this.hp - dmg);
-    this.invuln = this.invulnTime;
-    this.redrawHP();
-    this.setPlayerTextureHit();
-    this.opts.audio?.playOne?.("playerHit");
-    if (this.hp <= 0) this.endGame();
-    return true; // daño aplicado
+  if (this.ended || this.finished) return false;
+
+  // GOD mode = ni escudo ni vida bajan
+  if (this.godMode) return false;
+
+  // ⛨ El escudo absorbe primero
+  if (this.shieldCharges > 0) {
+    this.shieldCharges -= 1;
+    this.updateShieldHud();
+    this.shieldFlash = 0.18;
+    this.vibrate?.(15);
+    if (this.shieldCharges <= 0) this.setShield(false);
+    // Pequeña invuln para evitar multi-hit el mismo frame
+    this.invuln = Math.max(this.invuln, 0.10);
+    this.opts.audio?.playOne?.("impact");
+    return true; // golpe procesado (sin bajar HP)
   }
+
+  // Si no hay escudo, aplica daño normal (respetando invuln)
+  if (this.invuln > 0) return false;
+  this.hp = Math.max(0, this.hp - dmg);
+  this.invuln = this.invulnTime;
+  this.redrawHP();
+  this.setPlayerTextureHit();
+  this.opts.audio?.playOne?.("playerHit");
+  if (this.hp <= 0) this.endGame();
+  return true;
+}
 
   /* ============================== Destroy ================================ */
   destroy() {
@@ -1370,6 +1608,8 @@ try { this.posTextR2.destroy(); } catch {}
     try { this.godHalo.destroy(); } catch {}
     try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
+    try { this.shieldText.destroy(); } catch {}
+try { this.shieldRing.destroy(); } catch {}
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
     this.opts.audio?.stopSfx?.("motor");
     this.opts.audio?.stopBgm?.();

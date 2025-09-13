@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable no-empty */
 // src/game/Level6.ts
 import * as PIXI from "pixi.js";
 import { IMG } from "./assets";
@@ -32,7 +34,7 @@ type Shot = { sp: PIXI.Graphics; pos: Vec2; vx: number; vy: number };
 type Rival = { sp: PIXI.Sprite; pos: Vec2; speed: number; base: number; amp: number; phase: number };
 
 type Bubble = { sp: PIXI.Graphics; pos: Vec2; vy: number; alive: boolean };
-type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" };
+type Pickup = { sp: PIXI.Sprite; pos: Vec2; kind: "distortion" | "life" | "god" | "shield" };
 
 type LevelOpts = {
   onGameOver?: () => void;
@@ -102,12 +104,11 @@ this.maxX = Math.floor(this.W * this.RIGHT_FRAC); // opcional: - 12 para un pel�
 
   private tuning!: ReturnType<typeof getTuning>;
 private skinDef!: ReturnType<typeof getSkin>;
-
-  /* ===== Pista / vueltas ===== */
+private shieldPickupTimer = 14; shieldPickupMin = 16; shieldPickupMax = 26;  /* ===== Pista / vueltas ===== */
   camX = 0;
-  trackLength = 28000;
+  trackLength = 2800;
   lapFinishX = this.trackLength;
-  lapsTotal = 3;
+  lapsTotal = 1;
   lap = 1;
 
   /* ===== HUD ===== */
@@ -132,8 +133,44 @@ posTextR2 = new PIXI.Text({
   powerBar = new PIXI.Graphics();
   ammoText = new PIXI.Text({ text: "", style: { fill: 0x00d2ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" } });
   timeText = new PIXI.Text({ text: "00:00.000", style: { fill: 0xffffff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" } });
-  lapText = new PIXI.Text({ text: "VUELTA 1/6", style: { fill: 0xbfe8ff, fontSize: 18, fontFamily: "Arial", fontWeight: "900" } });
+  lapText = new PIXI.Text({ text: "VUELTA 1/3", style: { fill: 0xbfe8ff, fontSize: 18, fontFamily: "Arial", fontWeight: "900" } });
   levelTag = new PIXI.Text({ text: "L6", style: { fill: 0xccccff, fontSize: 12, fontFamily: "Arial", fontWeight: "700" } });
+
+  /* ===== Shield (escudo) ===== */
+shieldOn = false;
+shieldCharges = 0;
+shieldMaxCharges = 5;
+shieldFlash = 0;
+
+shieldLabel = new PIXI.Text({
+ text: "SHIELD",
+ style: { fill: 0x00d2ff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+});shieldText = new PIXI.Text({
+  text: "",
+  style: { fill: 0xffffff, fontSize: 14, fontFamily: "Arial", fontWeight: "700" },
+});
+
+private setShield(on: boolean) {
+  this.shieldOn = on;
+  this.shieldText.visible = on;
+   // HUD siempre visible: manejamos "apagado" con alpha
+  this.shieldLabel.visible = true;
+  this.shieldText.visible = true;
+}
+
+private updateShieldHud() {
+  this.shieldText.text = `x${this.shieldCharges}`;
+  // Flash cortito cuando absorbe un golpe
+  const has = this.shieldCharges > 0;
+  this.shieldText.text = `x${this.shieldCharges}`;
+  // colocar numerito a la derecha del label
+  this.shieldText.x = this.shieldLabel.x + this.shieldLabel.width + 6;
+  this.shieldText.y = this.shieldLabel.y;
+  // Flash cortito cuando absorbe un golpe; atenuado si está en 0
+  const alpha = this.shieldFlash > 0 ? 1 : (has ? 1 : 0.5);
+  this.shieldLabel.alpha = alpha;
+  this.shieldText.alpha = alpha;
+}
 
   // Cartel grande
   lapAnnounce = new PIXI.Text({
@@ -406,6 +443,7 @@ private redrawHP() {
     this.tex.kartShoot = await this.tryMany([
       (IMG as any).kartSubShoot, "/assets/img/karting-attack-submarine.png", (IMG as any).kartShoot, IMG.kartShoot
     ]);
+(this.tex as any).shield = await this.tryMany([ (IMG as any).shield, "/assets/img/shield.png" ]);
 
     // Enemigos (submarino)
     this.tex.enemy      = await this.tryMany([ (IMG as any).enemySubFront,  "/assets/img/enemies-submarine.png",         (IMG as any).regSide,  IMG.regSide ]);
@@ -424,6 +462,20 @@ private redrawHP() {
     (this.tex as any).pedal = await this.tryMany([ (IMG as any).pedalDist, IMG.pedalDist ]);
     (this.tex as any).life  = await this.tryMany([ (IMG as any).life, IMG.life, "/assets/img/life.png" ]);
     (this.tex as any).god   = await this.tryMany([ (IMG as any).god,  IMG.god,  "/assets/img/god.png" ]);
+
+    // OVERRIDE por skin (si hay assets de skin, pisan a los actuales)
+const skin = this.skinDef;
+if (skin) {
+  const frontOrSide = (skin as any).kartFront ?? skin.kartSide;
+  const side  = await this.tryLoad(frontOrSide);
+  const hit   = await this.tryLoad(skin.kartHit);
+  const dead  = await this.tryLoad(skin.kartDead);
+  const shoot = await this.tryLoad(skin.kartShoot);
+  if (side)  this.tex.kart = side;
+  if (hit)   this.tex.kartHit = hit;
+  if (dead)  this.tex.kartDead = dead;
+  if (shoot) this.tex.kartShoot = shoot;
+}
 
     // Fondo 2x
     if (this.tex.fondo) {
@@ -454,6 +506,9 @@ private redrawHP() {
 
     // HUD
     this.hud.position.set(20, 20);
+    this.hud.sortableChildren = true;
+(this.shieldLabel as any).zIndex = 3000;
+(this.shieldText as any).zIndex = 3001;
     this.hpBarBg.roundRect(0,0,260,18,9).fill(0x153949).stroke({ width:2, color:0x000000 });
     this.hud.addChild(this.hpBarBg, this.hpBarFg); this.redrawHP();
 
@@ -465,6 +520,17 @@ private redrawHP() {
 
     this.lapText.position.set(0, 64); this.updateLapHud(); this.hud.addChild(this.lapText);
     this.levelTag.position.set(230, 64); this.hud.addChild(this.levelTag);
+  // HUD: escudo (texto + numerito como en L5)
+// this.shieldIcon.clear(); // no usamos el cuadradito aquí
+// this.shieldIcon.visible = false;
+ this.shieldLabel.position.set(0, 84);
+ this.shieldText.position.set(this.shieldLabel.x + this.shieldLabel.width + 6, 84);
+this.hud.addChild(this.shieldLabel, this.shieldText);
+
+// Estado inicial (si hay cargas al entrar al nivel)
+this.setShield(this.shieldCharges > 0);
+this.updateShieldHud();
+
         this.levelTag.text = `L6 • ${this.opts.difficulty ?? "normal"}`;
 
 
@@ -582,6 +648,7 @@ private redrawHP() {
     this.world.addChild(sp);
     this.enemies.push({ kind: "turret", sp, pos: { x, y }, shootCd: 0.6 + Math.random()*0.7, hp: 2, dead: false });
   }
+  // eslint-disable-next-line @typescript-eslint/no-unused-expressions
   private spawnEnemy(){ Math.random() < 0.35 ? this.spawnTurret() : this.spawnRunner(); }
 
   private enemyShoot(from: Enemy){
@@ -630,6 +697,18 @@ private redrawHP() {
     if (!(this.tex as any).life) { const g = new PIXI.Graphics().circle(0,0,10).fill(0x33ddff); sp.texture = this.app.renderer.generateTexture(g); }
     this.world.addChild(sp); this.pickups.push({ sp, pos: { x, y }, kind: "life" });
   }
+private spawnShieldPickup(){
+  const x = this.camX + this.W + 210, y = this.playerY - 48;
+  const sp = new PIXI.Sprite((this.tex as any).shield ?? PIXI.Texture.WHITE);
+  sp.anchor.set(0.5); (sp as any).zIndex = 800;
+  if (!(this.tex as any).shield) {
+    const g = new PIXI.Graphics().circle(0,0,11).fill(0x00d2ff).stroke({ width:2, color:0xffffff });
+    sp.texture = this.app.renderer.generateTexture(g);
+  }
+  this.world.addChild(sp);
+  this.pickups.push({ sp, pos: { x, y }, kind: "shield" });
+}
+
   private spawnGodPickup(){
     if (this.godPickupsSpawned >= this.godPickupsMax) return;
     const x = this.camX + this.W + 220, y = this.playerY - 60;
@@ -643,7 +722,14 @@ private redrawHP() {
       this.opts.audio?.playOne?.("pickup");
     } else if (p.kind === "life") {
       this.hp = Math.min(this.maxHP, this.hp + 25); this.redrawHP(); this.opts.audio?.playOne?.("pickupLife");
-    } else {
+    } 
+    // en givePickup(p):
+else if (p.kind === "shield") {
+  this.shieldCharges = this.shieldMaxCharges; // siempre 5 al agarrar
+  this.setShield(true);
+  this.updateShieldHud();
+  this.opts.audio?.playOne?.("pickup");}
+else {
       this.setGod(true); this.godPickupsSpawned++; this.opts.audio?.playOne?.("pickupGod");
     }
   }
@@ -764,15 +850,17 @@ private showResultOverlay(titleText: string){
     this.enemyTimer = 9999; this.bubbleTimer = 9999;
     this.pickupTimer = 9999; this.lifePickupTimer = 9999; this.godPickupTimer = 9999; this.speed = 0;
   }
+
   private endGame(){
     if (this.ended) return; this.ended = true; this.setPlayerTextureDead(); this.showResultOverlay("GAME OVER");
     if (this.overlayTimer) clearTimeout(this.overlayTimer);
     this.overlayTimer = window.setTimeout(() => { this.overlay.visible = false; this.opts.onGameOver?.(); }, 2600);
     this.opts.audio?.stopSfx?.("motor");
   }
-
+private _prevCamX = 0;
   /* ============================ Update ================================= */
   update(dt: number){
+    const prevCam = this.camX;
     if (!this.ready || this.ended || this.finished) return;
 
     // COUNTDOWN
@@ -797,6 +885,10 @@ private showResultOverlay(titleText: string){
     if (this.playerShotCd > 0) this.playerShotCd -= dt;
     if (this.backPushTimer > 0) this.backPushTimer -= dt;
     if (this.jumpCdTimer > 0) this.jumpCdTimer -= dt;
+if (this.shieldFlash > 0) {
+  this.shieldFlash -= dt;
+  if (this.shieldFlash <= 0) this.updateShieldHud();
+}
 
     // Distortion barra
     if (this.hasDistortion){ this.distortTimer -= dt; if (this.distortTimer <= 0){ this.hasDistortion = false; this.redrawPower(); } }
@@ -874,6 +966,10 @@ const back = (this.backPushTimer > 0)
   : 0;
 
 this.camX += (this.speed - back) * dt;
+// --- compensación exacta del back-push para objetos “anclados” al mundo ---
+const idealDx  = this.speed * dt;     // lo que la cámara habría avanzado sin back-push
+const actualDx = this.camX - prevCam; // lo que realmente avanzó
+const shortfall = Math.max(0, idealDx - actualDx); // diferencia a compensar
 
     const bgOffset = -(this.camX * 0.22) % this.bgWidthScaled;
     this.bg1.x = bgOffset; this.bg2.x = bgOffset + this.bgWidthScaled;
@@ -991,10 +1087,21 @@ for (let i = 0; i < this.rivals.length; i++) {
       s.sp.x = this.screenX(s.pos.x); s.sp.y = s.pos.y;
       const pb = this.player.getBounds(), sb = s.sp.getBounds();
       const hit = pb.right > sb.left && pb.left < sb.right && pb.bottom > sb.top && pb.top < sb.bottom;
-      if (hit && this.jumpOffset < 10 && !this.controlsLocked){
-        if (this.hurtPlayer(10)) this.opts.audio?.playOne?.("impact");
-        s.pos.x = this.camX - 9999;
-      }
+     if (hit && this.jumpOffset < 10 && !this.controlsLocked) {
+  // Si hay escudo, lo absorbe y no hace daño
+  if (this.shieldCharges > 0) {
+    this.shieldCharges -= 1;
+    this.shieldFlash = 0.18;
+    this.updateShieldHud();
+    if (this.shieldCharges <= 0) { this.shieldOn = false; this.updateShieldHud(); }
+    this.opts.audio?.playOne?.("impact");
+    s.pos.x = this.camX - 9999; // eliminar el disparo
+  } else {
+    if (this.hurtPlayer(10)) this.opts.audio?.playOne?.("impact");
+    s.pos.x = this.camX - 9999;
+  }
+}
+
     }
     this.shots = this.shots.filter(s => { const alive = s.pos.x > this.camX - 300 && s.pos.x < this.camX + this.W + 400 && s.pos.y > 0 && s.pos.y < this.H; if (!alive) s.sp.destroy(); return alive; });
 
@@ -1033,16 +1140,33 @@ for (let i = 0; i < this.rivals.length; i++) {
 // En God Mode: ignora completamente el choque (no empuja, no destruye, no suena)
 if (this.godMode) {
   // no-op: la burbuja pasa “a través” del jugador
-} else if (hit && !this.controlsLocked && this.backPushTimer <= 0) {
+}  else if (hit && !this.controlsLocked && this.backPushTimer <= 0) {
   b.alive = false; try { b.sp.destroy(); } catch {}
-  this.backPushTimer = this.backPushDuration;
-  this.backPushPower = Math.max(320, Math.min(520, 240 + 0.75 * this.speed));
-  this.opts.audio?.playOne?.("impact");
-}
+
+  if (this.shieldCharges > 0) {
+    // Escudo: evita el empuje y consume 1 carga
+    this.shieldCharges -= 1;
+    this.shieldFlash = 0.18;
+    this.updateShieldHud();
+    if (this.shieldCharges <= 0) { this.shieldOn = false; this.updateShieldHud(); }
+    this.opts.audio?.playOne?.("impact");
+  } else {
+    // Sin escudo: comportamiento original (empuje hacia atrás)
+    this.backPushTimer = this.backPushDuration;
+    this.backPushPower = Math.max(320, Math.min(520, 240 + 0.75 * this.speed));
+    this.opts.audio?.playOne?.("impact");
+  }
+
+
 
     }
     this.bubbles = this.bubbles.filter(b => b.alive);
-
+// SHIELD pickup
+this.shieldPickupTimer -= dt;
+if (this.shieldPickupTimer <= 0 && !this.controlsLocked) {
+  this.spawnShieldPickup();
+  this.shieldPickupTimer = this.shieldPickupMin + Math.random() * (this.shieldPickupMax - this.shieldPickupMin);
+}
     // Pickups (spawn + recoger)
     this.pickupTimer -= dt;
     if (this.pickupTimer <= 0 && !this.controlsLocked){ this.spawnPickup(); this.pickupTimer = this.pickupMin + Math.random()*(this.pickupMax - this.pickupMin); }
@@ -1050,8 +1174,11 @@ if (this.godMode) {
     if (this.lifePickupTimer <= 0 && !this.controlsLocked){ this.spawnLifePickup(); this.lifePickupTimer = this.lifePickupMin + Math.random()*(this.lifePickupMax - this.lifePickupMin); }
     this.godPickupTimer -= dt;
     if (this.godPickupsSpawned < this.godPickupsMax && this.godPickupTimer <= 0 && !this.controlsLocked){ this.spawnGodPickup(); this.godPickupTimer = this.godPickupMin + Math.random()*(this.godPickupMax - this.godPickupMin); }
-    for (const p of this.pickups){
-      p.pos.x -= this.baseSpeed * dt; p.sp.x = this.screenX(p.pos.x); p.sp.y = this.playerY - 40;
+   for (const p of this.pickups){
+   // Compensación de cámara cuando hay back-push para que no "se congelen"
+  p.pos.x -= shortfall;
+   p.sp.x = this.screenX(p.pos.x);
+   p.sp.y = p.pos.y;
       const pb = this.player.getBounds(), qb = p.sp.getBounds();
       const touch = pb.right > qb.left && pb.left < qb.right && pb.bottom > qb.top && pb.top < qb.bottom;
       if (touch && !this.controlsLocked){ this.givePickup(p); p.pos.x = this.camX - 9999; }
@@ -1062,6 +1189,7 @@ if (this.godMode) {
     this.updateMiniMap();
   }
 
+  }
   /* ============================== Daño player ============================ */
   private hurtPlayer(dmg: number): boolean {
     if (this.invuln > 0 || this.ended || this.finished || this.godMode) return false;
@@ -1086,6 +1214,8 @@ try { this.posTextR2.destroy(); } catch {}
     try { this.world.removeChildren(); } catch {}
     try { this.bgLayer.removeChildren(); } catch {}
     try { this.hud.removeChildren(); } catch {}
+    try { this.shieldText.destroy(); } catch {}
+try { this.shieldLabel.destroy(); } catch {}
     for (const e of this.enemies) { try { e.sp.destroy(); } catch {} }
     for (const r of this.rivals)  { try { r.sp.destroy(); } catch {} }
     for (const s of this.shots)   { try { s.sp.destroy(); } catch {} }
@@ -1095,6 +1225,7 @@ try { this.posTextR2.destroy(); } catch {}
     try { this.godHalo.destroy(); } catch {}
     try { this.trailContainer.destroy({ children: true }); } catch {}
     try { this.stage.destroy({ children: true }); } catch {}
+
     if (this.overlayTimer) { clearTimeout(this.overlayTimer); this.overlayTimer = null; }
     this.opts.audio?.stopSfx?.("motor");
     this.ready = false;

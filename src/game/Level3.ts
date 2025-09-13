@@ -151,9 +151,9 @@ shieldPickupMax   = 26;
 
   /* ===== Pista / vueltas (modo distancia, MÁS LARGO) ===== */
   camX = 0;
-  trackLength = 25000;            // <- vueltas más largas que L1/L2
+  trackLength = 2500;            // <- vueltas más largas que L1/L2
   lapFinishX = this.trackLength; // worldX de meta de la vuelta actual
-  lapsTotal = 3;                // (puede cambiarse)
+  lapsTotal = 1;                // (puede cambiarse)
   lap = 1;
 
   finishSprite!: PIXI.Sprite | PIXI.Graphics;
@@ -283,7 +283,7 @@ shieldPickupMax   = 26;
   playerShotCdMax = 0.25;
 
   // sprites jugador
-  tex: Record<string, PIXI.Texture | undefined> = {};
+  // tex: Record<string, PIXI.Texture | undefined> = {};
 
   setPlayerTextureHit() {
     if (this.tex.kartHit) this.player.texture = this.tex.kartHit;
